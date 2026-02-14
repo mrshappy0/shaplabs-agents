@@ -22,6 +22,7 @@
     "@mastra/evals": "^1.1.1",
     "@mastra/libsql": "^1.4.0",
     "@mastra/loggers": "^1.0.1",
+    "@mastra/mcp": "^1.0.1",
     "@mastra/memory": "^1.3.0",
     "@mastra/observability": "^1.2.0",
     "zod": "^4"

@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { weatherTool } from '../tools/weather-tool';
 import { scorers } from '../scorers/weather-scorer';
+import { homeAssistantMcpClient } from '../mcp/home-assistant-mcp-client';
 
 export const weatherAgent = new Agent({
   id: 'weather-agent',
