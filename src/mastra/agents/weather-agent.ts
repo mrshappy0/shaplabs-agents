@@ -3,6 +3,7 @@ import { Memory } from '@mastra/memory';
 import { weatherTool } from '../tools/weather-tool';
 import { scorers } from '../scorers/weather-scorer';
 import { homeAssistantMcpClient } from '../mcp/home-assistant-mcp-client';
+import { weatherWorkflow } from '../workflows/weather-workflow';
 
 export const weatherAgent = new Agent({
   id: 'weather-agent',
@@ -22,7 +23,8 @@ export const weatherAgent = new Agent({
       Use the weatherTool to fetch current weather data.
 `,
   model: 'openai/gpt-4o',
-  tools: { weatherTool },
+  tools: { weatherTool, ...(await homeAssistantMcpClient.listTools()) },
+  workflows: { weatherWorkflow },
   scorers: {
     toolCallAppropriateness: {
       scorer: scorers.toolCallAppropriatenessScorer,
@@ -46,5 +48,5 @@ export const weatherAgent = new Agent({
       },
     },
   },
-  memory: new Memory(),
+  memory: new Memory()
 });
