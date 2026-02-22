@@ -317,8 +317,16 @@ function parseRegistry(image: string): RegistryInfo {
     };
   }
 
-  // Docker Hub — official images use library/ prefix
-  const repo = image.includes('/') ? image : `library/${image}`;
+  // Docker Hub — strip common prefixes (docker.io/, index.docker.io/)
+  let stripped = image;
+  for (const prefix of ['docker.io/', 'index.docker.io/']) {
+    if (stripped.startsWith(prefix)) {
+      stripped = stripped.slice(prefix.length);
+      break;
+    }
+  }
+  // Official images use library/ prefix (e.g. "redis" → "library/redis")
+  const repo = stripped.includes('/') ? stripped : `library/${stripped}`;
   return {
     registryUrl: 'https://registry-1.docker.io',
     tokenUrl: `https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull`,
@@ -327,11 +335,23 @@ function parseRegistry(image: string): RegistryInfo {
 }
 
 /**
- * Get an anonymous auth token for pulling manifests.
+ * Get an auth token for pulling manifests.
+ * Uses Docker Hub credentials (DOCKERHUB_USERNAME + DOCKERHUB_TOKEN) when
+ * available to avoid anonymous rate-limits / 401s. Falls back to anonymous.
  */
 async function getRegistryToken(tokenUrl: string): Promise<string> {
-  const res = await fetch(tokenUrl);
-  if (!res.ok) throw new Error(`Token request failed: ${res.status}`);
+  const headers: Record<string, string> = {};
+
+  // Docker Hub auth endpoint accepts Basic auth to issue an authenticated token
+  const dhUser = process.env.DOCKERHUB_USERNAME;
+  const dhToken = process.env.DOCKERHUB_TOKEN;
+  if (dhUser && dhToken && tokenUrl.includes('auth.docker.io')) {
+    const creds = Buffer.from(`${dhUser}:${dhToken}`).toString('base64');
+    headers['Authorization'] = `Basic ${creds}`;
+  }
+
+  const res = await fetch(tokenUrl, { headers });
+  if (!res.ok) throw new Error(`Token request failed: ${res.status} ${res.statusText}`);
   const data = (await res.json()) as { token: string };
   return data.token;
 }
