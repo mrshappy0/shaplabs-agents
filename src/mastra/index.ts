@@ -38,31 +38,39 @@ export const mastra = new Mastra({
   }),
 });
 
-// Reset docker-update-agent working memory on dev startup
-if (process.env.NODE_ENV === 'development') {
-  (async () => {
-    try {
-      const agent = mastra.getAgent('dockerUpdateAgent');
-      const memory = await agent.getMemory();
-      if (!memory) {
-        console.log('[startup] No memory configured on agent');
-        return;
-      }
-      const { threads } = await memory.listThreads({ perPage: false });
-      if (threads.length === 0) {
-        console.log('[startup] No threads found — working memory is fresh');
-        return;
-      }
-      for (const thread of threads) {
-        await memory.updateWorkingMemory({
-          threadId: thread.id,
-          resourceId: thread.resourceId,
-          workingMemory: WORKING_MEMORY_TEMPLATE,
-        });
-      }
-      console.log(`[startup] Reset working memory to template across ${threads.length} thread(s)`);
-    } catch (err) {
-      console.warn('[startup] Could not reset working memory:', err);
+/**
+ * Resets working memory to the default template for all threads
+ * belonging to the docker-update-agent. Only runs when both
+ * NODE_ENV=development and RESET_WORKING_MEMORY=true are set.
+ */
+async function resetWorkingMemory() {
+  if (process.env.NODE_ENV !== 'development' || process.env.RESET_WORKING_MEMORY !== 'true') {
+    return;
+  }
+
+  try {
+    const agent = mastra.getAgent('dockerUpdateAgent');
+    const memory = await agent.getMemory();
+    if (!memory) {
+      console.log('[startup] No memory configured on agent');
+      return;
     }
-  })();
+    const { threads } = await memory.listThreads({ perPage: false });
+    if (threads.length === 0) {
+      console.log('[startup] No threads found — working memory is fresh');
+      return;
+    }
+    for (const thread of threads) {
+      await memory.updateWorkingMemory({
+        threadId: thread.id,
+        resourceId: thread.resourceId,
+        workingMemory: WORKING_MEMORY_TEMPLATE,
+      });
+    }
+    console.log(`[startup] Reset working memory to template across ${threads.length} thread(s)`);
+  } catch (err) {
+    console.warn('[startup] Could not reset working memory:', err);
+  }
 }
+
+resetWorkingMemory();

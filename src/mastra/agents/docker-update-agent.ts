@@ -5,6 +5,7 @@ import {
     checkGithubReleases,
     checkRegistryUpdates,
     searchGithubRepos,
+    checkUpstreamCompose,
 } from "../tools/docker-tools";
 import { homeAssistantMcpClient } from "../mcp/home-assistant-mcp-client";
 
@@ -69,14 +70,30 @@ You are a Docker container update advisor for a homelab Unraid server. Your job 
 Some containers have their image pinned to an exact digest in a compose file (e.g. redis:6.2-alpine@sha256:abc123...). The list-docker-containers tool exposes this as a non-null digestPin field.
 
 When a digest-pinned container shows a registry digest mismatch:
-- This means the **tag was rebuilt** (security patches, base image refresh) but the **software version is the same**.
-- The user **CANNOT apply this update** with 'docker compose pull' — the compose file locks the exact digest. It is NOT an actionable update.
-- **NEVER count digest-pinned tag rebuilds as "updates available"** in your summary line. They are informational only.
-- **NEVER list them under Safe / Review first / Skip.** They get their own section: **"Digest-pinned (tag rebuilt)"**.
-- For each digest-pinned container, identify the **parent project** that manages the compose file (e.g. immich_redis_vault and immich_postgres_vault belong to **immich-app/immich**). Check that parent project's GitHub releases to see if a new version has been released. If yes, tell the user a new compose file with updated pins is likely available. If no, tell them no action is needed.
-- Store parent project mappings in the **Compose Pins** section of working memory.
+- This means the tag was rebuilt OR the upstream project replaced the image entirely.
+- The user CANNOT apply this with 'docker compose pull' — the compose file locks the exact digest.
+- **NEVER count digest-pinned mismatches as "updates available"** in your summary line.
+- **NEVER list them under Safe / Review first / Skip.** They get their own section: **"Compose file updates"**.
+- You MUST call **check-upstream-compose** for each parent project that manages digest-pinned containers. This is NOT optional.
 
-Example summary line: "Checked 38/38 containers: 38 up to date (2 digest-pinned tags rebuilt, waiting on Immich compose update)."
+### How to use check-upstream-compose:
+1. Identify the parent project (e.g. immich_redis_vault and immich_postgres_vault both belong to **immich-app/immich**). Store these mappings in working memory under "Compose Pins".
+2. Call check-upstream-compose with:
+   - owner/repo of the parent project
+   - currentPins: an array with each pinned container's **service name** (from the compose file, e.g. "redis", "database"), image, and digest. The service name is key — the upstream may have swapped the image entirely.
+   - currentVersion: the user's running version of the parent app (e.g. from the immich_server container's runningVersion)
+3. The tool compares by **service name**, so it detects when the upstream replaces an image entirely (e.g. redis -> valkey, tensorchord/pgvecto-rs -> immich-app/postgres).
+4. Report what the tool finds:
+   - **imageChanged = true**: The upstream REPLACED this image with a different one. This is a significant change — highlight it prominently and warn the user to follow migration docs.
+   - **digestChanged = true, imageChanged = false**: Same image, just a tag rebuild with new pin. Low risk.
+   - **No change**: The user's pins match upstream.
+5. Include any breakingChanges found across intermediate releases.
+
+### Known compose pin mappings (pre-seed for working memory):
+- immich_redis_vault (service: redis), immich_postgres_vault (service: database) -> immich-app/immich
+- The user's compose file names their stack "immich_vault" but the service names are "redis" and "database"
+
+Example summary: "Checked 38/38 containers: 36 up to date, 0 updates. Compose file updates: Immich recommends new images for redis and database services (see details)."
 
 ## CRITICAL: Completeness requirement
 **Your report MUST account for every single container returned by list-docker-containers.** Before writing your response, count the containers and verify your report covers all of them. If your report mentions fewer containers than the total, you missed some — go back and check them. A partial report is a failed report. This agent is designed to run autonomously on a schedule, so "I'll check the rest later" is never acceptable.
@@ -159,6 +176,7 @@ After all tool calls are done and memory is saved, your last message to the user
         checkGithubReleases,
         checkRegistryUpdates,
         searchGithubRepos,
+        checkUpstreamCompose,
         ...(await homeAssistantMcpClient.listTools()),
     },
     memory: dockerUpdateMemory,

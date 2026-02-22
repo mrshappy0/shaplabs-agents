@@ -588,3 +588,422 @@ export const searchGithubRepos = createTool({
     }
   },
 });
+
+// ---------------------------------------------------------------------------
+// Helpers for upstream compose checking
+// ---------------------------------------------------------------------------
+
+function githubHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'mastra-docker-update-agent',
+  };
+  if (process.env.GITHUB_TOKEN) {
+    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+  return headers;
+}
+
+interface ParsedImagePin {
+  /** Compose service name (e.g. "redis", "database") */
+  service: string;
+  /** Full image reference without digest, e.g. "redis:6.2-alpine" */
+  image: string;
+  /** The sha256 digest, e.g. "sha256:abc123..." */
+  digest: string;
+}
+
+/**
+ * Parse image references with digest pins from a docker-compose YAML string.
+ * Also extracts the service name so we can match by role, not just image name.
+ * Handles patterns like:
+ *   redis:
+ *     image: docker.io/valkey/valkey:9@sha256:abc123
+ */
+function parseComposePins(yaml: string): ParsedImagePin[] {
+  const pins: ParsedImagePin[] = [];
+  const lines = yaml.split('\n');
+  let currentService: string | null = null;
+  let inServices = false;
+
+  for (const line of lines) {
+    // Detect the top-level "services:" block
+    if (/^services:\s*$/.test(line)) {
+      inServices = true;
+      continue;
+    }
+
+    if (inServices) {
+      // A top-level key under services (2-space or no indent, followed by ':')
+      const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/);
+      if (serviceMatch) {
+        currentService = serviceMatch[1];
+        continue;
+      }
+
+      // Exit services block if we hit another top-level key (no indent)
+      if (/^[a-zA-Z]/.test(line) && !line.startsWith(' ')) {
+        inServices = false;
+        currentService = null;
+        continue;
+      }
+
+      // Match image line with digest pin
+      const imageMatch = line.match(/^\s+image:\s*(.+?)@(sha256:[a-f0-9]+)/);
+      if (imageMatch && currentService) {
+        pins.push({
+          service: currentService,
+          image: imageMatch[1].trim().replace(/^["']|["']$/g, ''),
+          digest: imageMatch[2],
+        });
+      }
+    }
+  }
+
+  // Fallback: if service-aware parsing found nothing, try the simple regex
+  if (pins.length === 0) {
+    const regex = /^\s*image:\s*(.+?)@(sha256:[a-f0-9]+)/gm;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(yaml)) !== null) {
+      pins.push({
+        service: 'unknown',
+        image: match[1].trim().replace(/^["']|["']$/g, ''),
+        digest: match[2],
+      });
+    }
+  }
+
+  return pins;
+}
+
+/** Keywords that signal breaking changes in release notes */
+const BREAKING_KEYWORDS = [
+  /\bbreaking\s*change/i,
+  /\bBREAKING\b/,
+  /\bmigration\s*required/i,
+  /\baction\s*required/i,
+  /\bdeprecated?\b/i,
+  /\bremoved\b/i,
+  /\b⚠️/,
+  /\bdatabase\s*migration/i,
+  /\bschema\s*change/i,
+  /\bbackup\s*(your|the)?\s*(database|db|data)\b/i,
+];
+
+function extractBreakingChanges(body: string, version: string): string[] {
+  const lines = body.split('\n');
+  const matches: string[] = [];
+
+  for (const line of lines) {
+    for (const kw of BREAKING_KEYWORDS) {
+      if (kw.test(line)) {
+        matches.push(`[${version}] ${line.trim()}`);
+        break; // one match per line is enough
+      }
+    }
+  }
+
+  return matches;
+}
+
+// ---------------------------------------------------------------------------
+// Tool: Check Upstream Compose File
+// ---------------------------------------------------------------------------
+
+export const checkUpstreamCompose = createTool({
+  id: 'check-upstream-compose',
+  description:
+    'Fetches the latest docker-compose file from an upstream GitHub project (via release ' +
+    'assets or repo tree) and compares digest-pinned image references against your current ' +
+    'pins. Also scans all release notes between your current version and the latest for ' +
+    'breaking changes, migration requirements, and deprecations. Use this for digest-pinned ' +
+    'containers to determine if the upstream project recommends updating the compose file.',
+  inputSchema: z.object({
+    owner: z.string().describe('GitHub repo owner (e.g. "immich-app")'),
+    repo: z.string().describe('GitHub repo name (e.g. "immich")'),
+    composePath: z
+      .string()
+      .optional()
+      .describe(
+        'Path to compose file in the repo (e.g. "docker-compose.yml"). ' +
+        'The tool first checks release assets for this filename, then falls back to repo contents at the release tag. ' +
+        'Defaults to "docker-compose.yml".',
+      ),
+    currentVersion: z
+      .string()
+      .optional()
+      .describe(
+        'Your current version/release tag (e.g. "v1.120.0"). If provided, all releases between ' +
+        'this version and latest are scanned for breaking changes. If omitted, only the latest release is checked.',
+      ),
+    currentPins: z
+      .array(
+        z.object({
+          service: z
+            .string()
+            .describe('Compose service name (e.g. "redis", "database")'),
+          image: z
+            .string()
+            .describe('Full image reference without digest (e.g. "docker.io/redis:6.2-alpine")'),
+          digest: z
+            .string()
+            .describe('Current sha256 digest pin from your compose file'),
+        }),
+      )
+      .optional()
+      .describe('Your current digest pins to compare against the upstream compose file. Include service names from your compose.'),
+  }),
+  outputSchema: z.object({
+    latestVersion: z.string(),
+    currentVersion: z.string().optional(),
+    composeFound: z.boolean(),
+    composeSource: z
+      .string()
+      .optional()
+      .describe('Where the compose file was fetched from (release asset or repo path)'),
+    pinComparison: z.array(
+      z.object({
+        service: z.string().describe('Compose service name'),
+        upstreamImage: z.string(),
+        yourImage: z.string().optional(),
+        imageChanged: z.boolean().describe('True if the upstream uses a completely different image than yours'),
+        upstreamDigest: z.string(),
+        yourDigest: z.string().optional(),
+        digestChanged: z.boolean().describe('True if digests differ (either image swap or rebuild)'),
+        summary: z.string().describe('Human-readable summary of what changed for this service'),
+      }),
+    ),
+    breakingChanges: z
+      .array(z.string())
+      .describe('Lines from release notes that mention breaking changes, prefixed with version'),
+    releasesBetween: z
+      .array(
+        z.object({
+          version: z.string(),
+          date: z.string(),
+          highlights: z.string(),
+          hasBreakingIndicators: z.boolean(),
+        }),
+      )
+      .describe('All releases between currentVersion and latest, summarized'),
+    error: z.string().optional(),
+  }),
+  execute: async ({ owner, repo, composePath = 'docker-compose.yml', currentVersion, currentPins }) => {
+    const headers = githubHeaders();
+    const repoSlug = `${owner}/${repo}`;
+
+    try {
+      // ----- Step 1: Get latest release -----
+      const latestRes = await fetch(
+        `https://api.github.com/repos/${repoSlug}/releases/latest`,
+        { headers },
+      );
+      if (!latestRes.ok) {
+        return {
+          latestVersion: '',
+          composeFound: false,
+          pinComparison: [],
+          breakingChanges: [],
+          releasesBetween: [],
+          error: `Failed to fetch latest release: ${latestRes.status} ${latestRes.statusText}`,
+        };
+      }
+      const latestRelease = (await latestRes.json()) as {
+        tag_name: string;
+        body: string | null;
+        published_at: string;
+        assets: Array<{ name: string; browser_download_url: string }>;
+      };
+      const latestVersion = latestRelease.tag_name;
+
+      // ----- Step 2: Fetch compose file -----
+      let composeYaml: string | null = null;
+      let composeSource: string | null = null;
+      const composeFilename = composePath.split('/').pop() ?? composePath;
+
+      // Try release assets first
+      const asset = latestRelease.assets.find(
+        (a) => a.name === composeFilename || a.name === composePath,
+      );
+      if (asset) {
+        const assetRes = await fetch(asset.browser_download_url, {
+          headers: { 'User-Agent': 'mastra-docker-update-agent' },
+        });
+        if (assetRes.ok) {
+          composeYaml = await assetRes.text();
+          composeSource = `release asset: ${asset.name} (${latestVersion})`;
+        }
+      }
+
+      // Fallback: fetch from repo tree at the release tag
+      if (!composeYaml) {
+        const contentsRes = await fetch(
+          `https://api.github.com/repos/${repoSlug}/contents/${composePath}?ref=${latestVersion}`,
+          { headers: { ...headers, Accept: 'application/vnd.github.v3.raw' } },
+        );
+        if (contentsRes.ok) {
+          composeYaml = await contentsRes.text();
+          composeSource = `repo file: ${composePath} @ ${latestVersion}`;
+        }
+      }
+
+      // Also try without 'v' prefix if tag-based lookup failed
+      if (!composeYaml && latestVersion.startsWith('v')) {
+        const altTag = latestVersion.slice(1);
+        const contentsRes = await fetch(
+          `https://api.github.com/repos/${repoSlug}/contents/${composePath}?ref=${altTag}`,
+          { headers: { ...headers, Accept: 'application/vnd.github.v3.raw' } },
+        );
+        if (contentsRes.ok) {
+          composeYaml = await contentsRes.text();
+          composeSource = `repo file: ${composePath} @ ${altTag}`;
+        }
+      }
+
+      // ----- Step 3: Parse and compare pins -----
+      let pinComparison: Array<{
+        service: string;
+        upstreamImage: string;
+        yourImage?: string;
+        imageChanged: boolean;
+        upstreamDigest: string;
+        yourDigest?: string;
+        digestChanged: boolean;
+        summary: string;
+      }> = [];
+
+      if (composeYaml) {
+        const upstreamPins = parseComposePins(composeYaml);
+
+        const normalizeImage = (img: string) =>
+          img.replace(/^(docker\.io|index\.docker\.io)\//, '');
+
+        pinComparison = upstreamPins.map((up) => {
+          const normalizedUpImage = normalizeImage(up.image);
+
+          // Match by service name first, then fall back to image name
+          const matchByService = currentPins?.find((cp) => cp.service === up.service);
+          const matchByImage = currentPins?.find(
+            (cp) => normalizeImage(cp.image) === normalizedUpImage,
+          );
+          const match = matchByService ?? matchByImage;
+
+          if (!match) {
+            return {
+              service: up.service,
+              upstreamImage: up.image,
+              imageChanged: false,
+              upstreamDigest: up.digest,
+              digestChanged: false,
+              summary: 'New pinned service in upstream compose (not in your current file)',
+            };
+          }
+
+          const normalizedYourImage = normalizeImage(match.image);
+          const imageSwapped = normalizedUpImage !== normalizedYourImage;
+          const digestDiffers = match.digest !== up.digest;
+
+          let summary: string;
+          if (imageSwapped) {
+            summary = `IMAGE REPLACED: upstream switched from ${match.image} to ${up.image}. This is a significant change — review migration notes.`;
+          } else if (digestDiffers) {
+            summary = `Digest updated: same image (${up.image}) but tag was rebuilt with new pin.`;
+          } else {
+            summary = 'No change — your pin matches upstream.';
+          }
+
+          return {
+            service: up.service,
+            upstreamImage: up.image,
+            yourImage: match.image,
+            imageChanged: imageSwapped,
+            upstreamDigest: up.digest,
+            yourDigest: match.digest,
+            digestChanged: digestDiffers || imageSwapped,
+            summary,
+          };
+        });
+      }
+
+      // ----- Step 4: Fetch releases between current and latest -----
+      const allBreakingChanges: string[] = [];
+      const releasesBetween: Array<{
+        version: string;
+        date: string;
+        highlights: string;
+        hasBreakingIndicators: boolean;
+      }> = [];
+
+      if (currentVersion && currentVersion !== latestVersion) {
+        // Fetch up to 30 releases and filter to those between current and latest
+        let page = 1;
+        let foundCurrent = false;
+        const maxPages = 3; // up to 90 releases
+
+        while (!foundCurrent && page <= maxPages) {
+          const relRes = await fetch(
+            `https://api.github.com/repos/${repoSlug}/releases?per_page=30&page=${page}`,
+            { headers },
+          );
+          if (!relRes.ok) break;
+
+          const releases = (await relRes.json()) as Array<{
+            tag_name: string;
+            published_at: string;
+            body: string | null;
+            prerelease: boolean;
+            draft: boolean;
+          }>;
+          if (releases.length === 0) break;
+
+          for (const rel of releases) {
+            // Skip the current version itself — we want releases AFTER it
+            if (rel.tag_name === currentVersion) {
+              foundCurrent = true;
+              break;
+            }
+            // Skip pre-releases and drafts
+            if (rel.prerelease || rel.draft) continue;
+
+            const body = rel.body || '';
+            const breaking = extractBreakingChanges(body, rel.tag_name);
+            allBreakingChanges.push(...breaking);
+
+            releasesBetween.push({
+              version: rel.tag_name,
+              date: rel.published_at,
+              highlights: body.slice(0, 300),
+              hasBreakingIndicators: breaking.length > 0,
+            });
+          }
+
+          page++;
+        }
+      } else {
+        // No current version — just check the latest release notes
+        const body = latestRelease.body || '';
+        const breaking = extractBreakingChanges(body, latestVersion);
+        allBreakingChanges.push(...breaking);
+      }
+
+      return {
+        latestVersion,
+        currentVersion,
+        composeFound: composeYaml !== null,
+        composeSource: composeSource ?? undefined,
+        pinComparison,
+        breakingChanges: allBreakingChanges,
+        releasesBetween,
+      };
+    } catch (error) {
+      return {
+        latestVersion: '',
+        composeFound: false,
+        pinComparison: [],
+        breakingChanges: [],
+        releasesBetween: [],
+        error: `Failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  },
+});
