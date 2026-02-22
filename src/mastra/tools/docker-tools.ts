@@ -30,6 +30,7 @@ export const listDockerContainers = createTool({
         image: z.string(),
         tag: z.string(),
         imageId: z.string(),
+        digestPin: z.string().nullable().describe('If the image is digest-pinned (e.g. @sha256:...), this is the pinned digest. null otherwise.'),
         runningVersion: z.string().nullable(),
         state: z.string(),
         status: z.string(),
@@ -126,9 +127,25 @@ export const listDockerContainers = createTool({
         })
         .map((c) => {
           const imageWithTag = c.image;
-          const [imageName, tag] = imageWithTag.includes(':')
-            ? [imageWithTag.slice(0, imageWithTag.lastIndexOf(':')), imageWithTag.slice(imageWithTag.lastIndexOf(':') + 1)]
-            : [imageWithTag, 'latest'];
+
+          // Handle digest-pinned images: image:tag@sha256:... or image@sha256:...
+          let imageName: string;
+          let tag: string;
+          let digestPin: string | null = null;
+
+          const atIdx = imageWithTag.indexOf('@sha256:');
+          const baseRef = atIdx !== -1 ? imageWithTag.slice(0, atIdx) : imageWithTag;
+          if (atIdx !== -1) {
+            digestPin = imageWithTag.slice(atIdx + 1); // 'sha256:abc...'
+          }
+
+          if (baseRef.includes(':')) {
+            imageName = baseRef.slice(0, baseRef.lastIndexOf(':'));
+            tag = baseRef.slice(baseRef.lastIndexOf(':') + 1);
+          } else {
+            imageName = baseRef;
+            tag = 'latest';
+          }
 
           // Extract running version from OCI labels
           const labels = c.labels ?? {};
@@ -146,6 +163,7 @@ export const listDockerContainers = createTool({
             name: (c.names?.[0] ?? c.id).replace(/^\//, ''),
             image: imageName,
             tag,
+            digestPin,
             imageId: c.imageId,
             runningVersion,
             state: c.state,
@@ -398,15 +416,14 @@ export const checkRegistryUpdates = createTool({
     'images are available for the given containers. Compares the remote image ' +
     'config digest against the local imageId. If they match, the container is ' +
     'truly up to date — regardless of what GitHub releases say. ' +
-    'Accepts up to 8 containers per call to avoid timeouts.',
+    'Accepts up to 20 containers per call. You MUST call this for every container — never skip any.',
   inputSchema: z.object({
     containers: z.array(
       z.object({
         image: z.string().describe('Full image name without tag (e.g. "ghcr.io/hotio/radarr")'),
         tag: z.string().describe('Image tag (e.g. "latest")'),
         localImageId: z.string().describe('Local imageId from Unraid (sha256:...)'),
-      }),
-    ).describe('Containers to check. Max 8 per call.'),
+      }).describe('Containers to check. Max 20 per call - send as many as possible per batch.')),
   }),
   outputSchema: z.object({
     results: z.array(
@@ -421,7 +438,7 @@ export const checkRegistryUpdates = createTool({
     ),
   }),
   execute: async ({ containers }) => {
-    const batch = containers.slice(0, 8);
+    const batch = containers.slice(0, 20);
 
     const results = await Promise.all(
       batch.map(async ({ image, tag, localImageId }) => {
