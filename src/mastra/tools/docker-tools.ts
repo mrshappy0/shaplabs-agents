@@ -20,8 +20,8 @@ export const listDockerContainers = createTool({
   inputSchema: z.object({
     stateFilter: z
       .enum(['running', 'exited', 'all'])
-      .optional()
-      .describe('Filter by container state. Defaults to "all".'),
+      .nullable()
+      .describe('Filter by container state. Defaults to "all". Pass null to use the default.'),
   }),
   outputSchema: z.object({
     containers: z.array(
@@ -203,8 +203,8 @@ export const checkGithubReleases = createTool({
     repo: z.string().describe('GitHub repository name (e.g. "jellyfin")'),
     count: z
       .number()
-      .optional()
-      .describe('Number of recent releases to fetch (default: 2, max: 10)'),
+      .nullable()
+      .describe('Number of recent releases to fetch (default: 2, max: 10). Pass null to use the default.'),
   }),
   outputSchema: z.object({
     repository: z.string(),
@@ -222,8 +222,8 @@ export const checkGithubReleases = createTool({
     rateLimitRemaining: z.number().optional(),
     error: z.string().optional(),
   }),
-  execute: async ({ owner, repo, count = 2 }) => {
-    const perPage = Math.min(count, 10);
+  execute: async ({ owner, repo, count }) => {
+    const perPage = Math.min(count ?? 2, 10);
     const url = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=${perPage}`;
 
     try {
@@ -500,14 +500,13 @@ export const searchGithubRepos = createTool({
     'Searches GitHub for repositories matching a query. Use this to discover ' +
     'the upstream GitHub repo for a Docker container when the sourceUrl label ' +
     'points to a Docker packaging repo (e.g. hotio/radarr) rather than the ' +
-    'upstream app (e.g. Radarr/Radarr). Save discovered mappings to your ' +
-    'working memory so you don\'t have to search again.',
+    'upstream app (e.g. Radarr/Radarr).',
   inputSchema: z.object({
     query: z.string().describe('Search query (e.g. "radarr" or "jellyfin media server")'),
     maxResults: z
       .number()
-      .optional()
-      .describe('Max results to return (default: 5, max: 10)'),
+      .nullable()
+      .describe('Max results to return (default: 5, max: 10). Pass null to use the default.'),
   }),
   outputSchema: z.object({
     results: z.array(
@@ -521,8 +520,8 @@ export const searchGithubRepos = createTool({
     ),
     error: z.string().optional(),
   }),
-  execute: async ({ query, maxResults = 5 }) => {
-    const perPage = Math.min(maxResults, 10);
+  execute: async ({ query, maxResults }) => {
+    const perPage = Math.min(maxResults ?? 5, 10);
     const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=${perPage}`;
 
     try {
@@ -550,7 +549,6 @@ export const searchGithubRepos = createTool({
           description: string | null;
           stargazers_count: number;
           html_url: string;
-          has_downloads: boolean;
         }>;
       };
 
@@ -723,18 +721,18 @@ export const checkUpstreamCompose = createTool({
     repo: z.string().describe('GitHub repo name (e.g. "immich")'),
     composePath: z
       .string()
-      .optional()
+      .nullable()
       .describe(
         'Path to compose file in the repo (e.g. "docker-compose.yml"). ' +
         'The tool first checks release assets for this filename, then falls back to repo contents at the release tag. ' +
-        'Defaults to "docker-compose.yml".',
+        'Defaults to "docker-compose.yml". Pass null to use the default.',
       ),
     currentVersion: z
       .string()
-      .optional()
+      .nullable()
       .describe(
         'Your current version/release tag (e.g. "v1.120.0"). If provided, all releases between ' +
-        'this version and latest are scanned for breaking changes. If omitted, only the latest release is checked.',
+        'this version and latest are scanned for breaking changes. Pass null to check only the latest release.',
       ),
     currentPins: z
       .array(
@@ -750,8 +748,8 @@ export const checkUpstreamCompose = createTool({
             .describe('Current sha256 digest pin from your compose file'),
         }),
       )
-      .optional()
-      .describe('Your current digest pins to compare against the upstream compose file. Include service names from your compose.'),
+      .nullable()
+      .describe('Your current digest pins to compare against the upstream compose file. Include service names from your compose. Pass null if not comparing pins.'),
   }),
   outputSchema: z.object({
     latestVersion: z.string(),
@@ -788,7 +786,8 @@ export const checkUpstreamCompose = createTool({
       .describe('All releases between currentVersion and latest, summarized'),
     error: z.string().optional(),
   }),
-  execute: async ({ owner, repo, composePath = 'docker-compose.yml', currentVersion, currentPins }) => {
+  execute: async ({ owner, repo, composePath, currentVersion, currentPins }) => {
+    composePath = composePath ?? 'docker-compose.yml';
     const headers = githubHeaders();
     const repoSlug = `${owner}/${repo}`;
 
@@ -988,7 +987,7 @@ export const checkUpstreamCompose = createTool({
 
       return {
         latestVersion,
-        currentVersion,
+        currentVersion: currentVersion ?? undefined,
         composeFound: composeYaml !== null,
         composeSource: composeSource ?? undefined,
         pinComparison,
