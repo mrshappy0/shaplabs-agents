@@ -1,42 +1,51 @@
 #!/usr/bin/env node
 /**
- * One-time script to register the /docker-check slash command with Discord.
+ * Registers slash commands with Discord.
  *
- * Run this once after creating your Discord app / bot:
- *
+ * Global (default):
  *   npx tsx src/scripts/register-discord-commands.ts
+ *   — Takes up to 1 hour to propagate.
  *
- * Required env vars (set in .env before running):
- *   DISCORD_BOT_TOKEN
- *   DISCORD_APP_ID
+ * Guild (instant, your server only):
+ *   DISCORD_GUILD_ID=<your-server-id> npx tsx src/scripts/register-discord-commands.ts
+ *   — Right-click server name in Discord → Copy Server ID (requires Developer Mode)
  *
- * Global commands take up to 1 hour to propagate to all servers.
- * For faster testing, register as a guild command instead — swap the URL below
- * to: /applications/{appId}/guilds/{guildId}/commands
+ * Required env vars: DISCORD_BOT_TOKEN, DISCORD_APP_ID
  */
 
-import 'dotenv/config';
+process.loadEnvFile(new URL('../../.env', import.meta.url));
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const appId = process.env.DISCORD_APP_ID;
+const guildId = process.env.DISCORD_GUILD_ID;
 
 if (!token || !appId) {
   console.error('❌  DISCORD_BOT_TOKEN and DISCORD_APP_ID must be set in .env');
   process.exit(1);
 }
 
-const commands = [
+const clearGlobal = process.argv.includes('--clear-global');
+
+const commands = clearGlobal ? [] : [
   {
     name: 'docker-check',
     description: 'Run a Docker container update check and auto-apply safe updates',
-    default_member_permissions: null, // visible to everyone — restrict in Discord server settings if needed
+    default_member_permissions: null,
   },
 ];
 
-const url = `https://discord.com/api/v10/applications/${appId}/commands`;
+const url = guildId
+  ? `https://discord.com/api/v10/applications/${appId}/guilds/${guildId}/commands`
+  : `https://discord.com/api/v10/applications/${appId}/commands`;
+
+if (clearGlobal) {
+  console.log('🗑️  Clearing all global commands...');
+} else {
+  console.log(guildId ? `📡  Registering guild commands (instant) for guild ${guildId}...` : '📡  Registering global commands...');
+}
 
 const res = await fetch(url, {
-  method: 'PUT', // PUT replaces all global commands atomically
+  method: 'PUT',
   headers: {
     'Content-Type': 'application/json',
     Authorization: `Bot ${token}`,
@@ -52,9 +61,17 @@ if (!res.ok) {
 }
 
 const registered = await res.json() as { name: string; id: string }[];
-console.log('✅  Registered commands:');
-for (const cmd of registered) {
-  console.log(`   /${cmd.name}  (id: ${cmd.id})`);
+if (clearGlobal) {
+  console.log('✅  All global commands cleared.');
+} else {
+  console.log('✅  Registered commands:');
+  for (const cmd of registered) {
+    console.log(`   /${cmd.name}  (id: ${cmd.id})`);
+  }
 }
-console.log('\n⚠️  Global commands can take up to 1 hour to propagate.');
-console.log('    For instant testing, use guild commands (see script comment).');
+if (!guildId && !clearGlobal) {
+  console.log('\n⚠️  Global commands can take up to 1 hour to propagate.');
+  console.log('    For instant testing: DISCORD_GUILD_ID=<id> npx tsx src/scripts/register-discord-commands.ts');
+}
+
+export {};

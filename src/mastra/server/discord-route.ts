@@ -80,7 +80,8 @@ const InteractionType = {
 
 const ResponseType = {
   PONG: 1,
-  DEFERRED_CHANNEL_MESSAGE: 5, // ack slash command — reply later via webhook
+  CHANNEL_MESSAGE_WITH_SOURCE: 4, // immediate response
+  DEFERRED_CHANNEL_MESSAGE: 5,    // ack slash command — reply later via webhook
 } as const;
 
 const EPHEMERAL = 64; // message flag — only visible to the user who triggered
@@ -176,23 +177,12 @@ async function handleApplyAll(
 
 async function handleDockerCheck(
   mastra: Mastra,
-  appId: string,
-  token: string,
 ): Promise<void> {
-  await editInteractionResponse(appId, token, {
-    content: '🔍 Running Docker update check... results will appear in the channel shortly.',
-    flags: EPHEMERAL,
-  });
-
   try {
     const agent = mastra.getAgent('dockerManagerAgent');
     await agent.generate('Do your thing boss');
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await followupMessage(appId, token, {
-      content: `❌ Docker check failed: ${msg}`,
-      flags: EPHEMERAL,
-    });
+    console.error('[discord-route] docker-check agent error:', err);
   }
 }
 
@@ -246,14 +236,17 @@ export function createDiscordRouteHandler(mastra: Mastra): AnyHandler {
     // ── /docker-check ───────────────────────────────────────────────────────
     if (type === InteractionType.APPLICATION_COMMAND && data?.name === 'docker-check') {
       setImmediate(() => {
-        handleDockerCheck(mastra, appId, token as string).catch(err =>
+        handleDockerCheck(mastra).catch(err =>
           console.error('[discord-route] docker-check error:', err),
         );
       });
 
       return jsonResponse({
-        type: ResponseType.DEFERRED_CHANNEL_MESSAGE,
-        data: { flags: EPHEMERAL },
+        type: ResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: '🔍 Running Docker update check... results will appear in the channel shortly.',
+          flags: EPHEMERAL,
+        },
       });
     }
 

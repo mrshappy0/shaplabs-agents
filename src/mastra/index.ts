@@ -11,14 +11,17 @@ import { scheduledWorkflow } from './workflows/scheduled-workflow';
 import { dockerUpdateWorkflow } from './workflows/docker-update-workflow';
 import { dockerApplyUpdatesWorkflow } from './workflows/docker-apply-updates-workflow';
 import { dockerCronWorkflow } from './workflows/docker-cron-workflow';
-import { dockerCronTestWorkflow } from './workflows/docker-cron-test-workflow';
+// import { dockerCronTestWorkflow } from './workflows/docker-cron-test-workflow';
 import { weatherAgent } from './agents/weather-agent';
 import { dockerClassifierAgent } from './agents/docker-classifier-agent';
 import { dockerManagerAgent } from './agents/docker-manager-agent';
 import { toolCallAppropriatenessScorer, completenessScorer, translationScorer } from './scorers/weather-scorer';
 
 export const mastra = new Mastra({
-  workflows: { weatherWorkflow, scheduledWorkflow, dockerUpdateWorkflow, dockerApplyUpdatesWorkflow, dockerCronWorkflow, dockerCronTestWorkflow },
+  workflows: { weatherWorkflow, scheduledWorkflow, dockerUpdateWorkflow, dockerApplyUpdatesWorkflow, dockerCronWorkflow, 
+    // dockerCronWorkflow: Runs the Docker Manager Agent every two minutes to check for updates (for testing)
+    // dockerCronTestWorkflow
+  },
   agents: { weatherAgent, dockerClassifierAgent, dockerManagerAgent },
   server: {
     host: '0.0.0.0',
