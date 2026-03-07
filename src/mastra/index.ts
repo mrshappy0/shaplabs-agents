@@ -5,6 +5,7 @@ import { storage } from './storage';
 import { Observability, DefaultExporter, SensitiveDataFilter } from '@mastra/observability';
 import { serve } from '@mastra/inngest';
 import { inngest } from './inngest';
+import { createDiscordRouteHandler } from './server/discord-route';
 import { weatherWorkflow } from './workflows/weather-workflow';
 import { scheduledWorkflow } from './workflows/scheduled-workflow';
 import { dockerUpdateWorkflow } from './workflows/docker-update-workflow';
@@ -21,11 +22,26 @@ export const mastra = new Mastra({
   agents: { weatherAgent, dockerClassifierAgent, dockerManagerAgent },
   server: {
     host: '0.0.0.0',
+    auth: {
+      public: ['/api/discord', '/api/inngest'],
+      authenticateToken: async (token: string) => {
+        if (token === process.env.MASTRA_API_TOKEN) {
+          return { role: 'admin' };
+        }
+        throw new Error('Unauthorized');
+      },
+      authorize: async () => true,
+    },
     apiRoutes: [
       {
         path: '/api/inngest',
         method: 'ALL' as const,
         createHandler: async ({ mastra }: { mastra: Mastra }) => serve({ mastra, inngest }),
+      },
+      {
+        path: '/api/discord',
+        method: 'POST' as const,
+        createHandler: async ({ mastra }: { mastra: Mastra }) => createDiscordRouteHandler(mastra),
       },
     ],
   },
