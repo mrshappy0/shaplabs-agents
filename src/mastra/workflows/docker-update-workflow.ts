@@ -25,7 +25,9 @@ import {
   checkGithubReleases,
   checkUpstreamCompose,
   searchGithubRepos,
+  resolveVersionFromDigest,
 } from '../tools/docker-tools';
+import { notifyUpdateReport } from '../tools/discord-tools';
 
 // ── Output schema ─────────────────────────────────────────────────────────────
 // Defined here rather than in an agent file — the workflow owns this type now.
@@ -318,6 +320,78 @@ const mergeAndSplitStep = createStep({
   },
 });
 
+// ── Step 3.5: Resolve running versions for floating-tag containers ──────────────
+//
+// For containers tagged 'latest'/'nightly' with no runningVersion label, we
+// cross-reference the local image digest against all recent semver tags on
+// Docker Hub to find which exact version is actually running.
+// This turns "latest → v0.17.7" into "v0.17.3 → v0.17.7" with full changelog.
+
+const resolveRunningVersionsStep = createStep({
+  id: 'resolve-running-versions',
+  description:
+    'For containers with a floating tag (latest/nightly) and no runningVersion, ' +
+    'checks Docker Hub tags to find which semver version matches the local image digest. ' +
+    'Enriches runningVersion so classifyUpdatesStep can report the real version gap.',
+  inputSchema: z.object({
+    needsUpdate: z.array(containerSchema.extend({ remoteDigest: z.string() })),
+    digestPinned: z.array(containerSchema),
+    upToDate: z.array(z.string()),
+    registryErrors: z.array(
+      z.object({ containerName: z.string(), image: z.string(), error: z.string() }),
+    ),
+    totalCount: z.number(),
+  }),
+  outputSchema: z.object({
+    needsUpdate: z.array(containerSchema.extend({ remoteDigest: z.string() })),
+    digestPinned: z.array(containerSchema),
+    upToDate: z.array(z.string()),
+    registryErrors: z.array(
+      z.object({ containerName: z.string(), image: z.string(), error: z.string() }),
+    ),
+    totalCount: z.number(),
+  }),
+  execute: async ({ inputData }) => {
+    const { needsUpdate, digestPinned, upToDate, registryErrors, totalCount } = inputData;
+
+    const FLOATING_TAGS = new Set(['latest', 'nightly', 'stable', 'edge', 'dev', 'main', 'master']);
+
+    type ResolveOutput = { resolvedVersion: string | null; checkedTags: number; error?: string };
+
+    const enriched = await Promise.all(
+      needsUpdate.map(async (container) => {
+        // Only attempt resolution when: floating tag + no version label + Docker Hub image
+        if (
+          container.runningVersion !== null ||
+          !FLOATING_TAGS.has(container.tag.toLowerCase()) ||
+          container.digestPin
+        ) {
+          return container;
+        }
+
+        try {
+          const result = (await resolveVersionFromDigest.execute!(
+            { image: container.image, localDigest: container.imageId },
+            {},
+          )) as ResolveOutput;
+
+          if (result.resolvedVersion) {
+            // Strip leading 'v' to match label-sourced runningVersion format (e.g. "0.17.5" not "v0.17.5")
+            const normalized = result.resolvedVersion.replace(/^v/, '');
+            return { ...container, runningVersion: normalized };
+          }
+        } catch {
+          // Resolution failed — keep original container unchanged
+        }
+
+        return container;
+      }),
+    );
+
+    return { needsUpdate: enriched, digestPinned, upToDate, registryErrors, totalCount };
+  },
+});
+
 // ── Step 4: Fetch changelogs ──────────────────────────────────────────────────
 
 const fetchChangelogsStep = createStep({
@@ -358,55 +432,148 @@ const fetchChangelogsStep = createStep({
 
     const needsUpdateWithChangelogs = await Promise.all(
       needsUpdate.map(async (container) => {
-        // Always search GitHub dynamically — no hardcoded map.
-        // Use the bare app name from the image reference as the query.
+        // Resolve the GitHub repo for this container — 100% dynamic, no hardcoded maps.
+        //
+        // Resolution priority:
+        //   1. sourceUrl label: if it's a github.com URL pointing directly to an
+        //      upstream repo (not a packaging/docker-only repo), try it first.
+        //   2. Dynamic GitHub search on the bare image name, skipping archived repos.
+        //
+        // Any failure is captured in changelogError and surfaced in the output.
         const appName = container.image.split('/').pop() ?? container.image;
+
+        type GitHubOutput = { releases: { tagName: string; name: string; publishedAt: string; isPreRelease: boolean; isDraft: boolean; body: string; url: string }[]; error?: string };
+        type SearchOutput = { results: { fullName: string; stars: number; hasReleases: boolean; archived: boolean }[]; error?: string };
+
+        /** Fetch releases for owner/repo, caching by repoKey. */
+        const fetchForRepo = async (repoKey: string) => {
+          if (!repoChangelogs.has(repoKey)) {
+            const [owner, repo] = repoKey.split('/');
+            const ghResult = (await checkGithubReleases.execute!(
+              { owner, repo, count: 5 },
+              {},
+            )) as GitHubOutput;
+            if (ghResult.error) {
+              repoChangelogs.set(repoKey, { latestVersion: '', changelog: '', error: ghResult.error });
+            } else {
+              const latest = ghResult.releases.find((r) => !r.isPreRelease && !r.isDraft);
+              repoChangelogs.set(repoKey, {
+                latestVersion: latest?.tagName ?? '',
+                changelog: ghResult.releases
+                  .map((r) => `## ${r.tagName} (${r.publishedAt.slice(0, 10)})\n${r.body}`)
+                  .join('\n\n'),
+              });
+            }
+          }
+          return repoChangelogs.get(repoKey)!;
+        };
+
+        /**
+         * Extract "owner/repo" from a GitHub URL, or null if it's not a
+         * recognisable upstream repo URL (e.g. a packaging-only repo like
+         * "linuxserver/docker-*" or "hotio/*").
+         */
+        const parseGithubOwnerRepo = (url: string | null): string | null => {
+          if (!url) return null;
+          const m = url.match(/github\.com\/([^/]+)\/([^/?#]+)/);
+          if (!m) return null;
+          // Skip obvious Docker-packaging repos — they don't have upstream releases
+          const owner = m[1].toLowerCase();
+          const repo = m[2].toLowerCase().replace(/\.git$/, '');
+          if (
+            owner === 'linuxserver' ||
+            owner === 'hotio' ||
+            repo.startsWith('docker-') ||
+            repo === 'docker'
+          ) return null;
+          return `${m[1]}/${m[2].replace(/\.git$/, '')}`;
+        };
+
+        /**
+         * Validate that a GitHub repo name is a plausible match for this
+         * container's app name (avoids accepting totally unrelated popular repos).
+         */
+        const isPlausibleMatch = (repoFullName: string) => {
+          const appNameLower = appName.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const [owner, repo] = repoFullName.toLowerCase().split('/');
+          const combined = `${owner}${repo}`;
+          for (let len = Math.min(appNameLower.length, 8); len >= 4; len--) {
+            if (combined.includes(appNameLower.slice(0, len))) return true;
+          }
+          return false;
+        };
+
         try {
-          type SearchOutput = { results: { fullName: string; stars: number; hasReleases: boolean }[]; error?: string };
+          // ── 1. sourceUrl direct lookup ──
+          // Many containers set org.opencontainers.image.source to the real
+          // upstream GitHub repo. Try it first if it looks legit.
+          const sourceRepo = parseGithubOwnerRepo(container.sourceUrl);
+          if (sourceRepo) {
+            const cached = await fetchForRepo(sourceRepo);
+            if (!cached.error && cached.latestVersion) {
+              return {
+                ...container,
+                githubRepo: sourceRepo,
+                changelog: cached.changelog,
+                latestVersion: cached.latestVersion,
+              };
+            }
+            // sourceUrl led somewhere valid but had no releases — fall through to search
+          }
+
+          // ── 2. Dynamic GitHub search ──
+          // Skip archived repos (renamed/abandoned — their releases are stale).
           const searchResult = (await searchGithubRepos.execute!(
-            { query: appName, maxResults: 3 },
+            { query: appName, maxResults: 5 },
             {},
           )) as SearchOutput;
 
-          const best = searchResult.results.find((r) => r.hasReleases);
+          const best = searchResult.results.find(
+            (r) => r.hasReleases && !r.archived && isPlausibleMatch(r.fullName),
+          );
+
           if (best) {
-            const [owner, repo] = best.fullName.split('/');
-            const repoKey = `${owner}/${repo}`;
-            if (!repoChangelogs.has(repoKey)) {
-              type GitHubOutput = { releases: { tagName: string; name: string; publishedAt: string; isPreRelease: boolean; isDraft: boolean; body: string; url: string }[]; error?: string };
-              const ghResult = (await checkGithubReleases.execute!(
-                { owner, repo, count: 2 },
-                {},
-              )) as GitHubOutput;
-              if (ghResult.error) {
-                repoChangelogs.set(repoKey, { latestVersion: '', changelog: '', error: ghResult.error });
-              } else {
-                const latest = ghResult.releases.find((r) => !r.isPreRelease && !r.isDraft);
-                repoChangelogs.set(repoKey, {
-                  latestVersion: latest?.tagName ?? '',
-                  changelog: ghResult.releases
-                    .map((r) => `## ${r.tagName} (${r.publishedAt.slice(0, 10)})\n${r.body}`)
-                    .join('\n\n'),
-                });
-              }
-            }
-            const cached = repoChangelogs.get(repoKey)!;
+            const cached = await fetchForRepo(best.fullName);
             return {
               ...container,
-              githubRepo: repoKey,
+              githubRepo: best.fullName,
               changelog: cached.error ? undefined : cached.changelog,
-              changelogError: cached.error ? `Search found ${repoKey} but changelog failed: ${cached.error}` : undefined,
+              changelogError: cached.error
+                ? `GitHub repo found (${best.fullName}) but releases fetch failed: ${cached.error}`
+                : undefined,
               latestVersion: cached.latestVersion || undefined,
             };
           }
+
+          // Search found results but all were archived or implausible — surface that.
+          const archivedMatches = searchResult.results.filter(
+            (r) => r.archived && isPlausibleMatch(r.fullName),
+          );
+          if (archivedMatches.length > 0) {
+            return {
+              ...container,
+              githubRepo: undefined,
+              changelog: undefined,
+              changelogError:
+                `GitHub search found only archived repos for "${appName}" ` +
+                `(${archivedMatches.map((r) => r.fullName).join(', ')}) — ` +
+                `the project may have been renamed or moved. Check Docker Hub or the project site manually.`,
+            };
+          }
         } catch (err) {
-          // swallow search errors — classifier will note it
+          return {
+            ...container,
+            githubRepo: undefined,
+            changelog: undefined,
+            changelogError: `GitHub lookup failed for "${container.image}": ${err instanceof Error ? err.message : String(err)}`,
+          };
         }
+
         return {
           ...container,
           githubRepo: undefined,
           changelog: undefined,
-          changelogError: `No GitHub repo found for image "${container.image}" — check manually`,
+          changelogError: `No matching GitHub repo found for image "${container.image}" — check Docker Hub or the project site manually.`,
         };
       }),
     );
@@ -574,6 +741,49 @@ You are classifying Docker container updates for a homelab Unraid server.
 Classify each update in the data below into safe / reviewFirst / skip.
 Every container must appear in exactly one output section.
 
+## Rules for filling the output schema fields
+
+currentVersion:
+  - Use runningVersion when it is not null (e.g. "3.4.1" or "0.17.3").
+  - runningVersion may be a resolved semver version discovered by matching the
+    local image digest against Docker Hub tags — trust it as the real version.
+  - When runningVersion IS null, fall back to the container's tag field
+    (e.g. "latest", "nightly"). NEVER output "(no current version)".
+  - Always strip any leading "v" prefix for consistency (e.g. "0.17.5" not "v0.17.5").
+
+latestVersion:
+  - Use the latestVersion field from the changelog data when present.
+  - Strip any leading "v" prefix for consistency (e.g. "0.17.7" not "v0.17.7").
+  - If no latestVersion is available but the changelog mentions a version tag,
+    extract it. Otherwise write the remote image tag (e.g. "latest").
+  - NEVER output "(no latest version)".
+
+changesSummary:
+  - Write a single, concrete sentence about what changed in the new release.
+  - When currentVersion and latestVersion are both semver (e.g. 0.17.3 → 0.17.7),
+    summarise ALL intermediate releases in the changelog, not just the latest.
+  - If no changelog is available, write: "No changelog found — check
+    <githubRepo or Docker Hub page> for release notes."
+
+notes (safeToUpdate only):
+  - ONLY use this field for operational context unrelated to the changelog, e.g.
+    "pinned version tag — update via Unraid template" or "shared image with immich_ml".
+  - NEVER repeat changelog information here.
+  - NEVER write "No changelog found" here — that belongs in changesSummary only.
+  - Omit the field entirely if there is nothing operationally notable.
+
+warnings (reviewFirst only):
+  - Be specific. "Manual check required" alone is not a warning. State WHY
+    the user must check: e.g. "Major version bump from 11 to 12 — check for
+    breaking config changes." or "GitHub repo was renamed; verify the correct
+    update path."
+
+composePinUpdates:
+  - parentProject MUST be the GitHub repo that OWNS THE COMPOSE FILE, not the
+    image source. E.g. for immich's postgres and redis pins, parentProject is
+    "immich-app/immich", not "postgres" or "redis" or "tensorchord/pgvecto-rs".
+  - serviceName is the service key inside that compose file (e.g. "postgres", "redis").
+
 Checked at: ${checkedAt}
 Total containers: ${totalCount}
 
@@ -583,13 +793,14 @@ ${JSON.stringify(needsUpdateWithChangelogs, null, 2)}
 ## Digest-pinned containers (cannot be updated via Unraid UI) (${digestPinnedWithCompose.length})
 ${JSON.stringify(digestPinnedWithCompose, null, 2)}
 
-## Up to date (${upToDate.length} containers)
+## Up to date (${upToDate.length} containers) — copy these names VERBATIM into the output upToDate array
 ${JSON.stringify(upToDate)}
 
 ## Registry errors (${registryErrors.length})
 ${JSON.stringify(registryErrors, null, 2)}
 
 Produce a complete report following the output schema exactly.
+IMPORTANT: The output upToDate array MUST contain every name listed above — do not omit, abbreviate, or truncate this list.
 `.trim();
 
     const response = await agent.generate(prompt, {      structuredOutput: {
@@ -600,7 +811,64 @@ Produce a complete report following the output schema exactly.
       },
     });
 
-    return response.object;
+    const result = response.object;
+
+    // ── Post-AI corrections (deterministic overrides) ──
+
+    // 1. Guarantee upToDate list is complete — the AI may truncate 30+ names.
+    if (result.upToDate.length !== upToDate.length) {
+      result.upToDate = upToDate;
+      result.summary.upToDate = upToDate.length;
+    }
+
+    // 2. Guarantee ALL digest-pinned containers appear in composePinUpdates.
+    //    The AI drops them when it sees no changes — but they must be listed
+    //    so nothing is silently missing from the report.
+    const coveredByAI = new Set(result.composePinUpdates.map((c) => c.containerName));
+    for (const pinned of digestPinnedWithCompose) {
+      if (coveredByAI.has(pinned.name)) continue;
+      // Determine the parent project from the compose group, if known
+      const composeOwner = (pinned as { composeOwner?: string }).composeOwner;
+      const composeRepo = (pinned as { composeRepo?: string }).composeRepo;
+      const parentProject =
+        composeOwner && composeRepo ? `${composeOwner}/${composeRepo}` : 'unknown';
+      const composeCheck = (pinned as { composeCheck?: { pinComparison: { service: string; upstreamImage: string; imageChanged: boolean; upstreamDigest: string; digestChanged: boolean; summary: string }[] } }).composeCheck;
+      const pin = composeCheck?.pinComparison?.[0];
+      result.composePinUpdates.push({
+        containerName: pinned.name,
+        serviceName: pin?.service ?? pinned.name.split('_').pop() ?? pinned.name,
+        parentProject,
+        imageChanged: pin?.imageChanged ?? false,
+        digestChanged: pin?.digestChanged ?? false,
+        currentImage: `${pinned.image}:${pinned.tag}`,
+        newImage: pin?.imageChanged ? pin.upstreamImage : undefined,
+        notes: 'Digest-pinned container — no upstream compose changes detected.',
+        hasMigrationDocs: false,
+      });
+    }
+    result.summary.composePinsToReview = result.composePinUpdates.filter(
+      (c) => c.imageChanged || c.digestChanged,
+    ).length;
+
+    // 3. Strip empty notes strings from safeToUpdate (omit rather than "").
+    result.safeToUpdate = result.safeToUpdate.map(({ notes, ...rest }) =>
+      notes && notes.trim() ? { ...rest, notes } : rest,
+    );
+
+    return result;
+  },
+});
+
+// ── Discord notification step ────────────────────────────────────────────────
+
+const notifyDiscordStep = createStep({
+  id: 'notify-discord',
+  description: 'Posts the final update report to Discord via webhook. Pass-through — the report is returned unchanged as the workflow output.',
+  inputSchema: dockerReportSchema,
+  outputSchema: dockerReportSchema,
+  execute: async ({ inputData }) => {
+    await notifyUpdateReport(inputData);
+    return inputData;
   },
 });
 
@@ -624,7 +892,10 @@ export const dockerUpdateWorkflow = createWorkflow({
   .then(listContainersStep)
   .then(checkRegistryStep)
   .then(mergeAndSplitStep)
+  .then(resolveRunningVersionsStep)
   .then(fetchChangelogsStep)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   .then(classifyUpdatesStep as any)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  .then(notifyDiscordStep as any)
   .commit();

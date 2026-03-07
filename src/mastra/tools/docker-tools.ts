@@ -26,6 +26,7 @@ export const listDockerContainers = createTool({
   outputSchema: z.object({
     containers: z.array(
       z.object({
+        dockerId: z.string().describe('Actual Docker container ID (short hash) — use this as the mutation identifier, not imageId.'),
         name: z.string(),
         image: z.string(),
         tag: z.string(),
@@ -149,16 +150,22 @@ export const listDockerContainers = createTool({
 
           // Extract running version from OCI labels
           const labels = c.labels ?? {};
-          const runningVersion =
+          const rawVersion =
             labels['org.opencontainers.image.version'] ||
             // linuxserver images use build_version: "Linuxserver.io version:- X.Y.Z-lsNNN ..."
             (labels['build_version']?.match(/version:-\s*([^\s]+)/)?.[1]) ||
             null;
 
+          // Reject Ubuntu/Debian-style release names (e.g. "24.04", "22.04") that
+          // leak through from base image labels — they are not the app version.
+          const isOsVersion = rawVersion !== null && /^\d{2}\.\d{2}$/.test(rawVersion);
+          const runningVersion = isOsVersion ? null : rawVersion;
+
           // Extract source URL from OCI labels (may point to Docker packaging repo)
           const sourceUrl = labels['org.opencontainers.image.source'] || null;
 
           return {
+            dockerId: c.id,
             // Container names from Docker often start with "/", strip it
             name: (c.names?.[0] ?? c.id).replace(/^\//, ''),
             image: imageName,
@@ -491,6 +498,93 @@ export const checkRegistryUpdates = createTool({
 });
 
 // ---------------------------------------------------------------------------
+// Tool: Resolve Running Version From Digest
+// ---------------------------------------------------------------------------
+
+export const resolveVersionFromDigest = createTool({
+  id: 'resolve-version-from-digest',
+  description:
+    'For Docker Hub images with floating tags (latest/nightly), fetches recent ' +
+    'semver tags and finds which one has a config digest matching the local imageId. ' +
+    'This reveals the actual version running under a floating tag (e.g. "v0.17.3" ' +
+    'instead of just "latest"). Only works for Docker Hub images.',
+  inputSchema: z.object({
+    image: z.string().describe('Full image name without tag (e.g. "ollama/ollama")'),
+    localDigest: z.string().describe('Local imageId / config digest from Unraid (sha256:...)'),
+  }),
+  outputSchema: z.object({
+    resolvedVersion: z
+      .string()
+      .nullable()
+      .describe('Semver version tag matching the local digest, or null if not found'),
+    checkedTags: z.number().describe('How many tags were checked before giving up'),
+    error: z.string().optional(),
+  }),
+  execute: async ({ image, localDigest }) => {
+    try {
+      const { registryUrl, tokenUrl, repo } = parseRegistry(image);
+
+      // Only Docker Hub for now — GHCR tags API differs
+      if (!tokenUrl.includes('auth.docker.io')) {
+        return { resolvedVersion: null, checkedTags: 0 };
+      }
+
+      // Docker Hub tags API — sorted by last_updated so newest tags come first
+      const tagsUrl = `https://hub.docker.com/v2/repositories/${repo}/tags?page_size=50&ordering=last_updated`;
+      const tagsRes = await fetch(tagsUrl);
+      if (!tagsRes.ok) {
+        return {
+          resolvedVersion: null,
+          checkedTags: 0,
+          error: `Docker Hub tags API ${tagsRes.status}: ${tagsRes.statusText}`,
+        };
+      }
+
+      const tagsData = (await tagsRes.json()) as {
+        results: Array<{ name: string }>;
+      };
+
+      // Keep only semver-looking tags; drop floating, platform-specific, and pre-release tags
+      const FLOATING = new Set(['latest', 'nightly', 'stable', 'edge', 'dev', 'main', 'master']);
+      const semverTags = tagsData.results
+        .map((t) => t.name)
+        .filter(
+          (name) =>
+            /^v?\d+\.\d+/.test(name) &&
+            !FLOATING.has(name.toLowerCase()) &&
+            !/-rc\d*/i.test(name) &&
+            !/-beta/i.test(name) &&
+            !/-alpha/i.test(name),
+        )
+        .slice(0, 15); // check at most 15 recent semver tags
+
+      const token = await getRegistryToken(tokenUrl);
+
+      let checkedTags = 0;
+      for (const semverTag of semverTags) {
+        try {
+          checkedTags++;
+          const configDigest = await getRemoteConfigDigest(registryUrl, repo, semverTag, token);
+          if (configDigest === localDigest) {
+            return { resolvedVersion: semverTag, checkedTags };
+          }
+        } catch {
+          // skip this tag and try the next
+        }
+      }
+
+      return { resolvedVersion: null, checkedTags };
+    } catch (error) {
+      return {
+        resolvedVersion: null,
+        checkedTags: 0,
+        error: `Version resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Tool: Search GitHub Repos
 // ---------------------------------------------------------------------------
 
@@ -516,6 +610,7 @@ export const searchGithubRepos = createTool({
         stars: z.number(),
         url: z.string(),
         hasReleases: z.boolean(),
+        archived: z.boolean().describe('True when the GitHub repo is archived (read-only / abandoned). Prefer non-archived repos.'),
       }),
     ),
     error: z.string().optional(),
@@ -549,6 +644,7 @@ export const searchGithubRepos = createTool({
           description: string | null;
           stargazers_count: number;
           html_url: string;
+          archived: boolean;
         }>;
       };
 
@@ -573,6 +669,7 @@ export const searchGithubRepos = createTool({
             stars: item.stargazers_count,
             url: item.html_url,
             hasReleases,
+            archived: item.archived ?? false,
           };
         }),
       );
@@ -703,6 +800,283 @@ function extractBreakingChanges(body: string, version: string): string[] {
 
   return matches;
 }
+
+// ---------------------------------------------------------------------------
+// Tool: Update Docker Container (Unraid mutation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Triggers Unraid to pull the latest image for a container and restart it
+ * via mutation { docker { updateContainer(id: PrefixedID) } }.
+ *
+ * HTTP 400 from GraphQL means the query is syntactically malformed — most
+ * commonly caused by including a selection set on a scalar return or omitting
+ * one on an object return. We try both forms to handle either case.
+ */
+export const updateDockerContainer = createTool({
+  id: 'update-docker-container',
+  description:
+    'Updates a Docker container on Unraid via the GraphQL docker.updateContainer mutation. ' +
+    'Requires UNRAID_API_URL and UNRAID_API_KEY.',
+  inputSchema: z.object({
+    containerId: z.string().describe(
+      'The Unraid container ID as returned by list-docker-containers (dockerId field).',
+    ),
+    containerName: z.string().describe('Container name as shown in Unraid (e.g. "mealie").'),
+    image: z.string().describe('Full image name without tag (e.g. "ghcr.io/mealie-recipes/mealie").'),
+    tag: z.string().describe('Image tag (e.g. "latest").'),
+    dryRun: z
+      .boolean()
+      .optional()
+      .describe('When true, skips the mutation and returns what would have been called.'),
+  }),
+  outputSchema: z.object({
+    containerName: z.string(),
+    success: z.boolean(),
+    message: z.string(),
+    error: z.string().optional(),
+  }),
+  execute: async ({ containerId, containerName, image, tag, dryRun }) => {
+    const apiUrl = process.env.UNRAID_API_URL;
+    const apiKey = process.env.UNRAID_API_KEY;
+
+    if (!apiUrl || !apiKey) {
+      return {
+        containerName,
+        success: false,
+        message: 'Missing UNRAID_API_URL or UNRAID_API_KEY environment variable.',
+        error: 'Missing UNRAID_API_URL or UNRAID_API_KEY',
+      };
+    }
+
+    if (dryRun) {
+      return {
+        containerName,
+        success: true,
+        message:
+          `[dry-run] Would call: mutation { docker { updateContainer(id: "${containerId}") { id names state status } } } ` +
+          `(image=${image}:${tag})`,
+      };
+    }
+
+    const MUTATION_TIMEOUT_MS = 30_000;
+
+    const post = async (query: string) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), MUTATION_TIMEOUT_MS);
+      try {
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ query }),
+          signal: controller.signal,
+        });
+        const text = await res.text();
+        let body: { data?: unknown; errors?: { message: string }[] } = {};
+        try {
+          body = JSON.parse(text) as typeof body;
+        } catch {
+          // Non-JSON response (e.g. Unraid HTML error page) — surface the raw text
+          return { ok: false, status: res.status, body, rawText: text.slice(0, 500) };
+        }
+        return { ok: res.ok, status: res.status, body, rawText: undefined };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Inline the ID directly (no variables) — the schema uses PrefixedID, not ID,
+    // so $id: ID! variable declarations are rejected with HTTP 400.
+    // Confirmed via curl: returns DockerContainer! so object selection set is required.
+    // The raw `id` from the containers query IS the PrefixedID on this Unraid version.
+    const idCandidates = [containerId, `docker:${containerName}`, containerName];
+    const attempts: string[] = [];
+
+    for (const id of idCandidates) {
+      const query = `mutation { docker { updateContainer(id: "${id}") { id names state status } } }`;
+      try {
+        const { ok, status, body, rawText } = await post(query);
+
+        if (rawText !== undefined) {
+          // Unraid returned non-JSON — log the raw body so we can diagnose it
+          attempts.push(`id=${id} → HTTP ${status}, non-JSON response: ${rawText}`);
+          continue;
+        }
+
+        if (!ok) {
+          attempts.push(`id=${id} → HTTP ${status}`);
+          continue;
+        }
+
+        if (body.errors?.length) {
+          attempts.push(`id=${id} → ${body.errors.map(e => e.message).join('; ')}`);
+          continue;
+        }
+
+        return {
+          containerName,
+          success: true,
+          message: `✓ Updated "${containerName}" via docker.updateContainer (id=${id}).`,
+        };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        attempts.push(`id=${id} → ${e instanceof Error && e.name === 'AbortError' ? `timed out after ${MUTATION_TIMEOUT_MS / 1000}s` : msg}`);
+      }
+    }
+
+    return {
+      containerName,
+      success: false,
+      message: `docker.updateContainer failed for "${containerName}": ${attempts.join(' | ')}`,
+      error: attempts.join(' | '),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Tool: Introspect Unraid Mutations
+// ---------------------------------------------------------------------------
+
+export const introspectUnraidMutations = createTool({
+  id: 'introspect-unraid-mutations',
+  description:
+    'Runs GraphQL introspection against the Unraid API to find all mutation fields, ' +
+    'including sub-fields of nested object types (e.g. mutation { docker { ... } }). ' +
+    'Results are prefixed — top-level fields are shown as-is, nested fields as "docker.fieldName". ' +
+    'Use this when update-docker-container reports all variants failed.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    mutations: z.array(
+      z.object({
+        path: z.string().describe('Mutation path, e.g. "docker.updateContainer" or "createNotification"'),
+        args: z.array(z.object({ name: z.string(), type: z.string() })),
+      }),
+    ),
+    error: z.string().optional(),
+  }),
+  execute: async () => {
+    const apiUrl = process.env.UNRAID_API_URL;
+    const apiKey = process.env.UNRAID_API_KEY;
+
+    if (!apiUrl || !apiKey) {
+      return { mutations: [], error: 'Missing UNRAID_API_URL or UNRAID_API_KEY' };
+    }
+
+    type GqlType = {
+      kind: string;
+      name: string | null;
+      ofType?: GqlType | null;
+    };
+    type GqlArg = { name: string; type: GqlType };
+    type GqlField = { name: string; args: GqlArg[]; type: GqlType };
+
+    function resolveTypeName(t: GqlType): string {
+      if (t.name) return t.name;
+      if (t.ofType) return resolveTypeName(t.ofType);
+      return t.kind;
+    }
+
+    async function gql(query: string): Promise<unknown> {
+      const res = await fetch(apiUrl!, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey! },
+        body: JSON.stringify({ query }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      return res.json();
+    }
+
+    try {
+      // ── Pass 1: top-level mutation fields + their return type names ──────────
+      const pass1 = (await gql(`
+        query {
+          __schema {
+            mutationType {
+              fields {
+                name
+                args { name type { kind name ofType { kind name ofType { kind name } } } }
+                type { kind name ofType { kind name ofType { kind name } } }
+              }
+            }
+          }
+        }
+      `)) as {
+        data?: { __schema?: { mutationType?: { fields?: GqlField[] } } };
+        errors?: { message: string }[];
+      };
+
+      if (pass1.errors?.length) {
+        return { mutations: [], error: pass1.errors.map((e) => e.message).join('; ') };
+      }
+
+      const topFields = pass1.data?.__schema?.mutationType?.fields ?? [];
+      const results: { path: string; args: { name: string; type: string }[] }[] = [];
+      const nestedObjectTypes: { fieldName: string; typeName: string }[] = [];
+
+      for (const f of topFields) {
+        const returnTypeName = resolveTypeName(f.type);
+        const isObjectType = f.type.kind === 'OBJECT' ||
+          (f.type.kind === 'NON_NULL' && f.type.ofType?.kind === 'OBJECT');
+
+        if (isObjectType && f.args.length === 0) {
+          // Nested namespace (like `docker`) — drill in with pass 2
+          nestedObjectTypes.push({ fieldName: f.name, typeName: returnTypeName });
+        } else {
+          results.push({
+            path: f.name,
+            args: f.args.map((a) => ({ name: a.name, type: resolveTypeName(a.type) })),
+          });
+        }
+      }
+
+      // ── Pass 2: resolve sub-fields of each nested object type ───────────────
+      for (const { fieldName, typeName } of nestedObjectTypes) {
+        if (!typeName) continue;
+        try {
+          const pass2 = (await gql(`
+            query {
+              __type(name: "${typeName}") {
+                fields {
+                  name
+                  args { name type { kind name ofType { kind name ofType { kind name } } } }
+                }
+              }
+            }
+          `)) as {
+            data?: { __type?: { fields?: GqlField[] } };
+            errors?: { message: string }[];
+          };
+
+          const subFields = pass2.data?.__type?.fields ?? [];
+          for (const sf of subFields) {
+            results.push({
+              path: `${fieldName}.${sf.name}`,
+              args: sf.args.map((a) => ({ name: a.name, type: resolveTypeName(a.type) })),
+            });
+          }
+        } catch {
+          // sub-type lookup failed — just note the parent with no args
+          results.push({ path: `${fieldName}.*`, args: [] });
+        }
+      }
+
+      // Sort: docker/container matches first, then alphabetical
+      results.sort((a, b) => {
+        const aRel = /docker|container/i.test(a.path) ? 0 : 1;
+        const bRel = /docker|container/i.test(b.path) ? 0 : 1;
+        if (aRel !== bRel) return aRel - bRel;
+        return a.path.localeCompare(b.path);
+      });
+
+      return { mutations: results };
+    } catch (error) {
+      return {
+        mutations: [],
+        error: `Introspection failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Tool: Check Upstream Compose File
