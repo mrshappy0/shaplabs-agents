@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { init, createStep } from '@mastra/inngest';
 import { inngest } from '../inngest';
+import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../discord-gateway';
 
 const { createWorkflow } = init(inngest);
 
@@ -11,7 +12,13 @@ const runDockerManagerStep = createStep({
   outputSchema: z.object({ text: z.string() }),
   execute: async ({ inputData, mastra }) => {
     const agent = mastra?.getAgent('dockerManagerAgent');
-    const result = await agent.generate(inputData.prompt);
+    const channelId = process.env.DISCORD_CHANNEL_ID ?? 'default';
+    const result = await agent.generate(inputData.prompt, {
+      memory: {
+        resource: GATEWAY_RESOURCE_ID,
+        thread: gatewayThreadId(channelId),
+      },
+    });
     return { text: result.text };
   },
 });

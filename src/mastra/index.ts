@@ -6,6 +6,7 @@ import { Observability, DefaultExporter, SensitiveDataFilter } from '@mastra/obs
 import { serve } from '@mastra/inngest';
 import { inngest } from './inngest';
 import { createDiscordRouteHandler } from './server/discord-route';
+import { startDiscordGateway } from './discord-gateway';
 import { weatherWorkflow } from './workflows/weather-workflow';
 import { scheduledWorkflow } from './workflows/scheduled-workflow';
 import { dockerUpdateWorkflow } from './workflows/docker-update-workflow';
@@ -69,3 +70,5 @@ export const mastra = new Mastra({
     },
   }),
 });
+
+startDiscordGateway(mastra);

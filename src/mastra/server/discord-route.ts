@@ -22,6 +22,7 @@
 import type { Mastra } from '@mastra/core/mastra';
 import { getPending, deletePending } from '../tools/discord-pending';
 import { editInteractionResponse, followupMessage } from '../tools/discord-bot';
+import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../discord-gateway';
 
 // ── Ed25519 signature verification ────────────────────────────────────────────
 
@@ -180,7 +181,13 @@ async function handleDockerCheck(
 ): Promise<void> {
   try {
     const agent = mastra.getAgent('dockerManagerAgent');
-    await agent.generate('Do your thing boss');
+    const channelId = process.env.DISCORD_CHANNEL_ID ?? 'default';
+    await agent.generate('Do your thing boss', {
+      memory: {
+        resource: GATEWAY_RESOURCE_ID,
+        thread: gatewayThreadId(channelId),
+      },
+    });
   } catch (err) {
     console.error('[discord-route] docker-check agent error:', err);
   }
