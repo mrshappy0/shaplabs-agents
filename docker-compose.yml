@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
 
   mastra:
-    build: .
+    image: o0atomos0o/mastra-app:latest
     ports:
       - "4111:4111"
     env_file: .env
