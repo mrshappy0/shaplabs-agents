@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { weatherTool } from '../tools/weather-tool';
 import { scorers } from '../scorers/weather-scorer';
-import { homeAssistantMcpClient } from '../mcp/home-assistant-mcp-client';
+// import { homeAssistantMcpClient } from '../mcp/home-assistant-mcp-client'; // disabled — mcp-proxy not available in container
 import { weatherWorkflow } from '../workflows/weather-workflow';
 
 export const weatherAgent = new Agent({
@@ -23,7 +23,7 @@ export const weatherAgent = new Agent({
       Use the weatherTool to fetch current weather data.
 `,
   model: 'openai/gpt-4o',
-  tools: { weatherTool, ...(await homeAssistantMcpClient.listTools()) },
+  tools: { weatherTool },  // homeAssistantMcpClient.listTools() disabled — uncomment import above to re-enable
   workflows: { weatherWorkflow },
   scorers: {
     toolCallAppropriateness: {

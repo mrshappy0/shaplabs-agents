@@ -1,0 +1,14 @@
+node_modules/
+.build/
+.mastra/
+mastra.db
+mastra.db-shm
+mastra.db-wal
+discord-pending.json
+.env
+*.log
+.git/
+src/mastra/public/mastra.db
+src/mastra/public/mastra.db-shm
+src/mastra/public/mastra.db-wal
+src/mastra/public/discord-pending.json

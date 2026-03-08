@@ -1,0 +1,6 @@
+# Local Mac override — auto-merged by docker compose, not used on Unraid.
+# Replaces the Unraid-specific volume path with a local ./data directory.
+services:
+  mastra:
+    volumes:
+      - ./data:/data
