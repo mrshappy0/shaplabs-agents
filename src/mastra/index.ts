@@ -9,7 +9,7 @@ import { createDiscordRouteHandler } from './server/discord-route';
 import { startDiscordGateway } from './discord-gateway';
 import { weatherWorkflow } from './workflows/weather-workflow';
 import { scheduledWorkflow } from './workflows/scheduled-workflow';
-import { dockerUpdateWorkflow } from './workflows/docker-update-workflow';
+import { dockerCheckWorkflow } from './workflows/docker-check-workflow';
 import { dockerApplyUpdatesWorkflow } from './workflows/docker-apply-updates-workflow';
 import { dockerCronWorkflow } from './workflows/docker-cron-workflow';
 // import { dockerCronTestWorkflow } from './workflows/docker-cron-test-workflow';
@@ -19,8 +19,8 @@ import { dockerManagerAgent } from './agents/docker-manager-agent';
 import { toolCallAppropriatenessScorer, completenessScorer, translationScorer } from './scorers/weather-scorer';
 
 export const mastra = new Mastra({
-  workflows: { weatherWorkflow, scheduledWorkflow, dockerUpdateWorkflow, dockerApplyUpdatesWorkflow, dockerCronWorkflow, 
-    // dockerCronWorkflow: Runs the Docker Manager Agent every two minutes to check for updates (for testing)
+  workflows: { weatherWorkflow, scheduledWorkflow, dockerCheckWorkflow, dockerApplyUpdatesWorkflow, dockerCronWorkflow,
+    // dockerCronTestWorkflow: Runs the Docker Manager Agent every two minutes — enable for testing
     // dockerCronTestWorkflow
   },
   agents: { weatherAgent, dockerClassifierAgent, dockerManagerAgent },

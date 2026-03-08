@@ -1,7 +1,7 @@
 /**
- * Docker Update Workflow v2 — workflow-first approach
+ * Docker Check Workflow (docker-check-workflow) — workflow-first approach
  *
- * Compare to docker-update-workflow.ts (agent-first):
+ * Compare to docker-check-workflow.ts (agent-first):
  *   Agent-first:  1 step → agent autonomously calls tools, discovers repos,
  *                 reasons about risk, writes a report. Black box.
  *
@@ -26,6 +26,9 @@ import {
   checkUpstreamCompose,
   searchGithubRepos,
   resolveVersionFromDigest,
+  FLOATING_TAGS,
+  type CheckRegistryUpdatesOutput,
+  type ResolveVersionOutput,
 } from '../tools/docker-tools';
 import { notifyUpdateReport } from '../tools/discord-tools';
 
@@ -211,7 +214,6 @@ const checkRegistryStep = createStep({
     const BATCH_SIZE = 20;
     const allResults: z.infer<typeof registryResultSchema>[] = [];
 
-    type RegistryOutput = { results: z.infer<typeof registryResultSchema>[] };
     for (let i = 0; i < containers.length; i += BATCH_SIZE) {
       const batch = containers.slice(i, i + BATCH_SIZE);
       const result = (await checkRegistryUpdates.execute!(
@@ -223,7 +225,7 @@ const checkRegistryStep = createStep({
           })),
         },
         {},
-      )) as RegistryOutput;
+      )) as CheckRegistryUpdatesOutput;
       allResults.push(...result.results);
     }
 
@@ -354,10 +356,6 @@ const resolveRunningVersionsStep = createStep({
   execute: async ({ inputData }) => {
     const { needsUpdate, digestPinned, upToDate, registryErrors, totalCount } = inputData;
 
-    const FLOATING_TAGS = new Set(['latest', 'nightly', 'stable', 'edge', 'dev', 'main', 'master']);
-
-    type ResolveOutput = { resolvedVersion: string | null; checkedTags: number; error?: string };
-
     const enriched = await Promise.all(
       needsUpdate.map(async (container) => {
         // Only attempt resolution when: floating tag + no version label + Docker Hub image
@@ -373,7 +371,7 @@ const resolveRunningVersionsStep = createStep({
           const result = (await resolveVersionFromDigest.execute!(
             { image: container.image, localDigest: container.imageId },
             {},
-          )) as ResolveOutput;
+          )) as ResolveVersionOutput;
 
           if (result.resolvedVersion) {
             // Strip leading 'v' to match label-sourced runningVersion format (e.g. "0.17.5" not "v0.17.5")
@@ -874,8 +872,8 @@ const notifyDiscordStep = createStep({
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-export const dockerUpdateWorkflow = createWorkflow({
-  id: 'docker-update-workflow',
+export const dockerCheckWorkflow = createWorkflow({
+  id: 'docker-check-workflow',
   description:
     'Workflow-first Docker update checker. ' +
     'Steps 1-4 are fully deterministic (tool calls + logic). ' +
@@ -894,8 +892,6 @@ export const dockerUpdateWorkflow = createWorkflow({
   .then(mergeAndSplitStep)
   .then(resolveRunningVersionsStep)
   .then(fetchChangelogsStep)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .then(classifyUpdatesStep as any)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .then(notifyDiscordStep as any)
+  .then(classifyUpdatesStep)
+  .then(notifyDiscordStep)
   .commit();

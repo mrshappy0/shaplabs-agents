@@ -79,3 +79,19 @@ export function pruneExpired(): void {
   }
   if (changed) writeStore(store);
 }
+
+/**
+ * Remove one container from a pending run after it has been applied via a
+ * single-container button click. Deletes the entire entry when no containers
+ * remain so that a subsequent "Apply All" click sees an empty/missing run.
+ */
+export function removeContainerFromPending(runId: string, containerName: string): void {
+  const store = readStore();
+  const entry = store[runId];
+  if (!entry) return;
+  entry.containers = entry.containers.filter(c => c.containerName !== containerName);
+  if (entry.containers.length === 0) {
+    delete store[runId];
+  }
+  writeStore(store);
+}

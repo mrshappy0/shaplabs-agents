@@ -13,7 +13,7 @@
  */
 
 import type { z } from 'zod';
-import type { dockerReportSchema } from '../workflows/docker-update-workflow';
+import type { dockerReportSchema } from '../workflows/docker-check-workflow';
 import type { applyUpdatesReportSchema } from '../workflows/docker-apply-updates-workflow';
 import { postMessage, buildApprovalComponents } from './discord-bot';
 import { savePending, pruneExpired } from './discord-pending';

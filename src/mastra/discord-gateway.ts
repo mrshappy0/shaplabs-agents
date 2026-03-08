@@ -94,6 +94,10 @@ export function startDiscordGateway(mastra: Mastra): void {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let lastSeq: number | null = null;
 
+  // Discord close codes that signal a permanent error — retrying is pointless
+  // and could mask a misconfiguration (bad token, invalid intents, etc.).
+  const NON_RESUMABLE_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
+
   function connect(): void {
     const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
 
@@ -171,13 +175,19 @@ export function startDiscordGateway(mastra: Mastra): void {
     });
 
     ws.addEventListener('close', (event) => {
-      console.warn(
-        `[discord-gateway] WebSocket closed (code ${(event as CloseEvent).code}) — reconnecting in 5s`,
-      );
+      const code = (event as CloseEvent).code;
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
+      if (NON_RESUMABLE_CLOSE_CODES.has(code)) {
+        console.error(
+          `[discord-gateway] WebSocket closed with non-resumable code ${code} — NOT reconnecting. ` +
+          'Check DISCORD_BOT_TOKEN and Gateway Intent settings in the Discord Developer Portal.',
+        );
+        return;
+      }
+      console.warn(`[discord-gateway] WebSocket closed (code ${code}) — reconnecting in 5s`);
       setTimeout(connect, 5000);
     });
 

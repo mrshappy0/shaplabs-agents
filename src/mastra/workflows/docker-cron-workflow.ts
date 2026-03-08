@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { init, createStep } from '@mastra/inngest';
 import { inngest } from '../inngest';
 import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../discord-gateway';
+import { DOCKER_CHECK_PROMPT } from '../agents/docker-manager-agent';
 
 const { createWorkflow } = init(inngest);
 
@@ -29,7 +30,7 @@ export const dockerCronWorkflow = createWorkflow({
   outputSchema: z.object({ text: z.string() }),
   // Run every day at 12:00 PM MST (19:00 UTC)
   cron: '0 19 * * *',
-  inputData: { prompt: 'Do your thing boss' },
+  inputData: { prompt: DOCKER_CHECK_PROMPT },
 })
   .then(runDockerManagerStep)
   .commit();

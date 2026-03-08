@@ -1,15 +1,22 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { dockerUpdateWorkflow } from '../workflows/docker-update-workflow';
+import { dockerCheckWorkflow } from '../workflows/docker-check-workflow';
 import { dockerApplyUpdatesWorkflow } from '../workflows/docker-apply-updates-workflow';
 import { storage } from '../storage';
+
+/**
+ * Default prompt used to trigger the Docker Manager Agent from cron jobs and
+ * slash commands. Explicit wording ensures the agent runs a fresh check rather
+ * than skipping because it found recent results in its conversation history.
+ */
+export const DOCKER_CHECK_PROMPT = 'Run a fresh Docker update check now.';
 
 export const dockerManagerAgent = new Agent({
   id: 'dockerManagerAgent',
   name: 'Docker Update Manager',
   model: 'openai/gpt-4o',
   workflows: {
-    dockerUpdateWorkflow,
+    dockerCheckWorkflow,
     dockerApplyUpdatesWorkflow,
   },
   memory: new Memory({ storage, options: { lastMessages: 20 } }),
@@ -31,7 +38,7 @@ Before deciding to run any workflow, **check your conversation history**.
 - If the user references a specific container by name ("update Radarr", "what was
   wrong with Sonarr"), look back through your history to find what the last check
   said about it and act on that.
-- Only run dockerUpdateWorkflow when: (a) the user explicitly asks for a fresh
+- Only run dockerCheckWorkflow when: (a) the user explicitly asks for a fresh
   check, (b) your history has no recent check results, or (c) your last check is
   clearly stale (e.g. user says "check again").
 - If the user explicitly says "don't run a check" or "don't do any workflows",
@@ -40,14 +47,14 @@ Before deciding to run any workflow, **check your conversation history**.
 
 ## Workflow steps (when a check IS needed)
 
-1. **Run the check** — run dockerUpdateWorkflow.
+1. **Run the check** — run dockerCheckWorkflow.
 
 2. **Present a clear summary** — after checking, show the user:
    - Which containers are safe to update (being applied automatically)
    - Which need review first (list with specific warnings — require confirmation)
    - Which are being skipped and why
 
-3. **Auto-apply safe updates** — if dockerUpdateWorkflow returns any safeToUpdate
+3. **Auto-apply safe updates** — if dockerCheckWorkflow returns any safeToUpdate
    containers, immediately run dockerApplyUpdatesWorkflow with dryRun: false for
    those containers WITHOUT asking for confirmation. Do not pause or ask — just run it.
    The user has pre-approved all safeToUpdate updates.

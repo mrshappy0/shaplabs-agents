@@ -1,7 +1,7 @@
 /**
  * Docker Apply Updates Workflow
  *
- * Companion to docker-update-workflow.ts. While the check workflow discovers
+ * Companion to docker-check-workflow.ts. While the check workflow discovers
  * and classifies available updates, *this* workflow actually applies them.
  *
  * Designed to chain directly from the check workflow's output — the
@@ -34,7 +34,7 @@
 
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
-import { listDockerContainers, checkRegistryUpdates, updateDockerContainer } from '../tools/docker-tools';
+import { listDockerContainers, checkRegistryUpdates, updateDockerContainer, type ListDockerContainersOutput, type CheckRegistryUpdatesOutput } from '../tools/docker-tools';
 import { notifyApplyReport } from '../tools/discord-tools';
 
 // ── Shared input item schema ──────────────────────────────────────────────────
@@ -55,10 +55,9 @@ export type UpdateCandidate = z.infer<typeof updateCandidateSchema>;
 
 const confirmedContainerSchema = z.object({
   containerName: z.string(),
-  dockerId: z.string(),     // actual Docker container ID (PrefixedID) from list-docker-containers
-  containerId: z.string(),  // alias for dockerId — passed as PrefixedID to GraphQL mutations
-  image: z.string(),        // full image name without tag — passed to SSH docker pull
-  tag: z.string(),          // image tag — passed to SSH docker pull
+  dockerId: z.string().describe('Docker container ID (PrefixedID) from list-docker-containers — passed as containerId to the GraphQL mutation'),
+  image: z.string().describe('Full image name without tag — passed to the update mutation'),
+  tag: z.string().describe('Image tag — passed to the update mutation'),
   localDigest: z.string(),
   remoteDigest: z.string(),
 });
@@ -128,27 +127,10 @@ const preflightCheckStep = createStep({
     const { containers, dryRun = false } = inputData;
 
     // Fetch the live container list so we have current imageId values
-    type ListOutput = {
-      containers: Array<{
-        dockerId: string;
-        name: string;
-        image: string;
-        tag: string;
-        imageId: string;
-        digestPin: string | null;
-        runningVersion: string | null;
-        state: string;
-        status: string;
-        sourceUrl: string | null;
-      }>;
-      totalCount: number;
-      error?: string;
-    };
-
     const liveList = (await listDockerContainers.execute!(
       { stateFilter: null },
       {},
-    )) as ListOutput;
+    )) as ListDockerContainersOutput;
 
     if (liveList.error) {
       // Can't validate anything — skip all to avoid blind updates
@@ -166,7 +148,7 @@ const preflightCheckStep = createStep({
     const liveMap = new Map(liveList.containers.map((c) => [c.name, c]));
 
     // Identify which containers exist and aren't digest-pinned
-    const checkable: Array<{ candidate: UpdateCandidate; live: ListOutput['containers'][number] }> = [];
+    const checkable: Array<{ candidate: UpdateCandidate; live: ListDockerContainersOutput['containers'][number] }> = [];
     const skipped: z.infer<typeof skippedContainerSchema>[] = [];
 
     for (const candidate of containers) {
@@ -194,20 +176,8 @@ const preflightCheckStep = createStep({
       return { confirmed: [], skipped, dryRun };
     }
 
-    // Re-check registry for the checkable set
-    type RegistryOutput = {
-      results: Array<{
-        image: string;
-        tag: string;
-        updateAvailable: boolean;
-        localDigest: string;
-        remoteDigest?: string;
-        error?: string;
-      }>;
-    };
-
     const BATCH_SIZE = 20;
-    const allRegistryResults: RegistryOutput['results'] = [];
+    const allRegistryResults: CheckRegistryUpdatesOutput['results'] = [];
 
     for (let i = 0; i < checkable.length; i += BATCH_SIZE) {
       const batch = checkable.slice(i, i + BATCH_SIZE);
@@ -220,7 +190,7 @@ const preflightCheckStep = createStep({
           })),
         },
         {},
-      )) as RegistryOutput;
+      )) as CheckRegistryUpdatesOutput;
       allRegistryResults.push(...result.results);
     }
 
@@ -262,7 +232,6 @@ const preflightCheckStep = createStep({
       confirmed.push({
         containerName: candidate.containerName,
         dockerId: live.dockerId,
-        containerId: live.dockerId, // use the real Docker container ID, not imageId
         image: live.image,
         tag: live.tag,
         localDigest: reg.localDigest,
@@ -311,7 +280,7 @@ const applyUpdatesStep = createStep({
 
       const result = (await updateDockerContainer.execute!(
         {
-          containerId: container.containerId,
+          containerId: container.dockerId,
           containerName: container.containerName,
           image: container.image,
           tag: container.tag,
@@ -420,27 +389,10 @@ const verifyUpdatesStep = createStep({
 
         const batch = Array.from(pendingVerification.values());
 
-        // Re-fetch live containers to get fresh imageId values after the pull
-        type ListOutput = {
-          containers: Array<{
-            name: string;
-            image: string;
-            tag: string;
-            imageId: string;
-            digestPin: string | null;
-            runningVersion: string | null;
-            state: string;
-            status: string;
-            sourceUrl: string | null;
-          }>;
-          totalCount: number;
-          error?: string;
-        };
-
         const freshList = (await listDockerContainers.execute!(
           { stateFilter: null },
           {},
-        )) as ListOutput;
+        )) as ListDockerContainersOutput;
 
         const freshMap = new Map(
           (freshList.containers ?? []).map((c) => [c.name, c]),
@@ -466,7 +418,7 @@ const verifyUpdatesStep = createStep({
             })),
           },
           {},
-        )) as RegistryOutput;
+        )) as CheckRegistryUpdatesOutput;
 
         const resultMap = new Map(registryResult.results.map((r) => [`${r.image}:${r.tag}`, r]));
 
@@ -567,13 +519,13 @@ export const dockerApplyUpdatesWorkflow = createWorkflow({
     'Step 1 re-checks registries (preflight guard against stale reports). ' +
     'Step 2 applies updates serially via Unraid GraphQL mutation. ' +
     'Step 3 verifies success by re-checking digests. ' +
-    'Input containers array matches the safeToUpdate shape from docker-update-workflow ' +
+    'Input containers array matches the safeToUpdate shape from docker-check-workflow ' +
     'so the two workflows chain naturally. Use dryRun: true to validate without changing anything.',
   inputSchema: z.object({
     containers: z
       .array(updateCandidateSchema)
       .describe(
-        'Containers to update. Accepts the safeToUpdate array from docker-update-workflow directly. ' +
+        'Containers to update. Accepts the safeToUpdate array from docker-check-workflow directly. ' +
         'Only containerName is required — currentVersion and latestVersion are informational.',
       ),
     dryRun: z

@@ -20,9 +20,10 @@
  */
 
 import type { Mastra } from '@mastra/core/mastra';
-import { getPending, deletePending } from '../tools/discord-pending';
+import { getPending, deletePending, removeContainerFromPending } from '../tools/discord-pending';
 import { editInteractionResponse, followupMessage } from '../tools/discord-bot';
 import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../discord-gateway';
+import { DOCKER_CHECK_PROMPT } from '../agents/docker-manager-agent';
 
 // ── Ed25519 signature verification ────────────────────────────────────────────
 
@@ -117,6 +118,10 @@ async function handleApplyOne(
     content: `🔄 Applying **${containerName}**... check the channel for results.`,
   });
 
+  // Remove this container from pending before launching the workflow so that
+  // a second click on the same button can't trigger a duplicate apply.
+  removeContainerFromPending(runId, containerName);
+
   try {
     const workflow = mastra.getWorkflow('dockerApplyUpdatesWorkflow');
     const run = await workflow.createRun();
@@ -182,7 +187,7 @@ async function handleDockerCheck(
   try {
     const agent = mastra.getAgent('dockerManagerAgent');
     const channelId = process.env.DISCORD_CHANNEL_ID ?? 'default';
-    await agent.generate('Do your thing boss', {
+    await agent.generate(DOCKER_CHECK_PROMPT, {
       memory: {
         resource: GATEWAY_RESOURCE_ID,
         thread: gatewayThreadId(channelId),

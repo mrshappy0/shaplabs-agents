@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { init, createStep } from '@mastra/inngest';
 import { inngest } from '../inngest';
+import { DOCKER_CHECK_PROMPT } from '../agents/docker-manager-agent';
 
 const { createWorkflow } = init(inngest);
 
@@ -21,7 +22,7 @@ export const dockerCronTestWorkflow = createWorkflow({
   outputSchema: z.object({ text: z.string() }),
   // Run every 2 minutes for testing
   cron: '*/2 * * * *',
-  inputData: { prompt: 'Do your thing boss' },
+  inputData: { prompt: DOCKER_CHECK_PROMPT },
 })
   .then(runDockerManagerStep)
   .commit();

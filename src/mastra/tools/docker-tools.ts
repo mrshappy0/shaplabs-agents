@@ -2,8 +2,52 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Exported constants
 // ---------------------------------------------------------------------------
+
+/** Image tags that represent floating/rolling releases without a fixed version. */
+export const FLOATING_TAGS = new Set([
+  'latest', 'nightly', 'stable', 'edge', 'dev', 'main', 'master',
+]);
+
+// ---------------------------------------------------------------------------
+// Exported types
+// ---------------------------------------------------------------------------
+
+export type ListDockerContainersOutput = {
+  containers: Array<{
+    dockerId: string;
+    name: string;
+    image: string;
+    tag: string;
+    imageId: string;
+    digestPin: string | null;
+    runningVersion: string | null;
+    state: string;
+    status: string;
+    autoStart?: boolean;
+    sourceUrl: string | null;
+  }>;
+  totalCount: number;
+  error?: string;
+};
+
+export type CheckRegistryUpdatesOutput = {
+  results: Array<{
+    image: string;
+    tag: string;
+    updateAvailable: boolean;
+    localDigest: string;
+    remoteDigest?: string;
+    error?: string;
+  }>;
+};
+
+export type ResolveVersionOutput = {
+  resolvedVersion: string | null;
+  checkedTags: number;
+  error?: string;
+};
 
 // ---------------------------------------------------------------------------
 // Tool: List Docker Containers (live from Unraid API)
@@ -234,15 +278,7 @@ export const checkGithubReleases = createTool({
     const url = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=${perPage}`;
 
     try {
-      const headers: Record<string, string> = {
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'mastra-docker-update-agent',
-      };
-
-      if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-      }
-
+      const headers = githubHeaders();
       const response = await fetch(url, { headers });
 
       const rateLimitRemaining = Number(response.headers.get('x-ratelimit-remaining') ?? -1);
@@ -545,13 +581,12 @@ export const resolveVersionFromDigest = createTool({
       };
 
       // Keep only semver-looking tags; drop floating, platform-specific, and pre-release tags
-      const FLOATING = new Set(['latest', 'nightly', 'stable', 'edge', 'dev', 'main', 'master']);
       const semverTags = tagsData.results
         .map((t) => t.name)
         .filter(
           (name) =>
             /^v?\d+\.\d+/.test(name) &&
-            !FLOATING.has(name.toLowerCase()) &&
+            !FLOATING_TAGS.has(name.toLowerCase()) &&
             !/-rc\d*/i.test(name) &&
             !/-beta/i.test(name) &&
             !/-alpha/i.test(name),
@@ -620,15 +655,7 @@ export const searchGithubRepos = createTool({
     const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=${perPage}`;
 
     try {
-      const headers: Record<string, string> = {
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'mastra-docker-update-agent',
-      };
-
-      if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-      }
-
+      const headers = githubHeaders();
       const response = await fetch(url, { headers });
 
       if (!response.ok) {
