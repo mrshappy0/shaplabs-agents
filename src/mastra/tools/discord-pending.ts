@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-// Resolve relative to this file (src/mastra/tools/) → 3 levels up = project root.
+// Resolve relative to this file (src/mastra/tools/) → 4 levels up = project root.
 // This is stable regardless of what process.cwd() is at runtime (mastra dev changes it).
 const PROJECT_ROOT = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 const STORE_PATH = process.env.DISCORD_PENDING_PATH ?? resolve(PROJECT_ROOT, 'discord-pending.json');
