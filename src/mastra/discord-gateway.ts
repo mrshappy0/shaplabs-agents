@@ -108,12 +108,18 @@ export function startDiscordGateway(mastra: Mastra): void {
     ws.addEventListener('message', async (event) => {
       let payload: { op: number; d?: unknown; t?: string; s?: number | null };
       try {
-        // Node 22's built-in WebSocket may deliver event.data as a Blob
+        // Node 22's built-in WebSocket may deliver event.data as a Blob or BufferSource
         const raw = typeof event.data === 'string'
           ? event.data
           : typeof (event.data as Blob)?.text === 'function'
             ? await (event.data as Blob).text()
-            : String(event.data);
+            : event.data instanceof ArrayBuffer || ArrayBuffer.isView(event.data)
+              ? new TextDecoder('utf-8').decode(
+                  event.data instanceof ArrayBuffer ? event.data : (event.data as ArrayBufferView),
+                )
+              : typeof Buffer !== 'undefined' && Buffer.isBuffer(event.data)
+                ? event.data.toString('utf8')
+                : String(event.data);
         payload = JSON.parse(raw) as typeof payload;
       } catch (err) {
         console.error('[discord-gateway] Failed to parse message:', typeof event.data, err);
