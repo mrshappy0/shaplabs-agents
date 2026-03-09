@@ -7,5 +7,6 @@ dist
 *.db
 *.db-*
 discord-pending.json
+data/
 .netlify
 .vercel

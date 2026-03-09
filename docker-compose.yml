@@ -1,0 +1,48 @@
+# ── After starting, run on the HOST (not inside Docker): ─────────────────────
+#   tailscale funnel --bg 4111
+#
+# This exposes https://<hostname>.<tailnet>.ts.net to the internet so Discord
+# can POST interactions to /api/discord. Tailscale runs on the Unraid host and
+# forwards to the mastra container's published port 4111.
+#
+# --bg makes the funnel persist across reboots as a background service.
+# To stop: tailscale funnel --bg off 4111
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  inngest:
+    container_name: mastra-inngest
+    image: node:22-alpine
+    command: >
+      sh -c "npx --yes inngest-cli@1.17.2 dev
+        --port 8288
+        -u http://mastra:4111/api/inngest"
+    ports:
+      - "8288:8288"
+    restart: unless-stopped
+    labels:
+      net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/78935958?v=4"
+
+  mastra:
+    container_name: mastra
+    image: o0atomos0o/mastra-app:latest
+    ports:
+      - "4111:4111"
+    env_file: .env
+    environment:
+      DATABASE_URL: "file:/data/mastra.db"
+      DISCORD_PENDING_PATH: "/data/discord-pending.json"
+      INNGEST_BASE_URL: "http://inngest:8288"
+    volumes:
+      - /mnt/user/appdata/mastra:/data
+    depends_on:
+      - inngest
+    restart: unless-stopped
+    labels:
+      net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/149120496?v=4"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4111/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -84,21 +84,41 @@ Fill in `.env`. Every variable is described below.
 
 ### Invite the bot to your server
 
-1. **OAuth2 → URL Generator**
+> **This step is required before slash command registration.** Skipping it causes `403 Forbidden: Missing Access` when registering commands.
+
+1. **OAuth2 → URL Generator** in the Discord Developer Portal
 2. Scopes: `bot`, `applications.commands`
-3. Bot Permissions: `Send Messages`, `Read Message History`, `Use Slash Commands`
-4. Copy the generated URL, open it, and add the bot to your server
+3. Bot Permissions: `Send Messages`, `Read Message History`, `Embed Links`, `Use Slash Commands`
+4. Copy the generated URL, open it in a browser, and select your server
+
+If you ever need to change permissions: regenerate the URL with the new permissions selected and visit it again — Discord updates the bot's role in your server immediately. You need to be a server admin to authorize new permissions; removing permissions can be done directly in Server Settings → Roles instead.
 
 ### Register slash commands
 
-```bash
-# Instant registration (guild-scoped — your server only)
-# Right-click your server name → Copy Server ID to get DISCORD_GUILD_ID
-DISCORD_GUILD_ID=<your-server-id> npx tsx src/scripts/register-discord-commands.ts
+Use the Makefile targets (recommended) or run the script directly:
 
-# Global registration (takes up to 1 hour)
-npx tsx src/scripts/register-discord-commands.ts
+```bash
+# Instant, guild-scoped — Mac dev bot
+# Reads DISCORD_BOT_TOKEN, DISCORD_APP_ID, DISCORD_GUILD_ID from .env
+make register-guild
+
+# Global, ~1 hour propagation — Unraid prod bot
+# Pass Unraid credentials inline so they don't overwrite your .env
+TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-global
 ```
+
+Registration is idempotent — safe to re-run after adding or changing commands. Re-run it any time you modify `src/scripts/register-discord-commands.ts`.
+
+### Running two bots (dev vs prod)
+
+This project supports two independent Discord apps:
+
+| Bot | Scope | Channel | Command registration |
+|---|---|---|---|
+| Mac dev bot | Guild-scoped (instant) | Dev channel | `make register-guild` |
+| Unraid prod bot | Global (~1h) | Prod channel | `TOKEN=... APP_ID=... make register-global` |
+
+Each bot only responds to its configured `DISCORD_CHANNEL_ID`, so even if both bots show `/docker-check` in the command picker, only the bot for that channel will act on it.
 
 ### Set the interactions endpoint
 
@@ -115,13 +135,17 @@ Discord will send a verification ping — the server must be running for this to
 Tailscale Funnel exposes your local Mastra server to the public internet so Discord can POST interaction events to it. This replaces a traditional reverse proxy or cloud deployment for development.
 
 ```bash
-# Expose Mastra (port 4111) via Funnel
+# Expose Mastra (port 4111) via Funnel (foreground — dev)
 tailscale funnel 4111
+
+# Persistent background service (production / Unraid)
+tailscale funnel --bg 4111
+
+# To stop
+tailscale funnel --bg off 4111
 ```
 
 This gives you a stable public HTTPS URL like `https://<machine-name>.<tailnet>.ts.net`. Use that as your Discord Interactions Endpoint URL.
-
-> **Note:** Funnel must be re-enabled after machine restarts. Consider adding it to your startup scripts.
 
 To check the status:
 
@@ -190,14 +214,144 @@ Both are safe to delete to reset state. They are gitignored.
 
 ---
 
-## Future: Running on Unraid
+## Running on Unraid (Docker Compose)
 
-The goal is to run this as a Docker container on the same Unraid machine it manages. High-level plan:
+The image is published to Docker Hub (`o0atomos0o/mastra-app:latest`) and supports both `linux/amd64` (Unraid) and `linux/arm64` (Mac). No repo clone is needed on Unraid — Compose Manager pulls the image directly.
 
-1. **Build a Docker image** — `pnpm build` produces a `.build/` output; wrap it in a `node:22-alpine` image
-2. **Run Inngest alongside** — either as a sidecar container or use Inngest Cloud (free tier) instead of the local dev server
-3. **Tailscale in the container** — use a Tailscale auth key and the `tailscale/tailscale` sidecar or run `tailscaled` inside the container for Funnel
-4. **Persist data** — mount a host path to `/app/mastra.db` and `/app/discord-pending.json` so state survives container restarts
-5. **Env vars via Unraid template** — Unraid Community Applications templates support env var fields, so all secrets can be configured in the UI
+### Prerequisites
 
-This is not yet implemented — contributions welcome.
+- Unraid's **Docker Compose** plugin (Community Applications → search "Compose Manager")
+- Tailscale installed and authenticated on the Unraid host
+- A filled-in `.env` file
+
+### Steps
+
+**1. Build and push the image from Mac** (do this whenever you change code):
+
+```bash
+make push
+```
+
+**2. Create the data directory on Unraid** (once):
+
+```bash
+mkdir -p /mnt/user/appdata/mastra
+```
+
+**3. Set up Compose Manager:**
+
+- Unraid → Docker → **Compose Manager** → **Add New Stack**
+- Name the stack exactly `mastra-app` (must match the Compose Manager project directory)
+- Paste the contents of `docker-compose.yml` into the editor (**not** `docker-compose.override.yml` — that's for Mac only)
+  - Clear any pre-populated content in the editor before pasting
+- Save the stack
+
+**4. Add your `.env` file** to the Compose Manager project directory:
+
+```
+/boot/config/plugins/compose.manager/projects/mastra-app/.env
+```
+
+(`DATABASE_URL`, `DISCORD_PENDING_PATH`, and `INNGEST_BASE_URL` are set automatically by `docker-compose.yml` — don't include them in `.env`.)
+
+**5. Start the stack** in Compose Manager.
+
+**6. Enable Tailscale Funnel** on the Unraid host (run once; persists across reboots):
+
+```bash
+# Note: port 443 is occupied by the Unraid WebGUI, so use 8443
+tailscale funnel --bg --https=8443 4111
+```
+
+This gives you a stable public URL like `https://<unraid-hostname>.<tailnet>.ts.net:8443`.
+
+**7. Set the Discord Interactions Endpoint URL:**
+
+In the Discord Developer Portal → your Unraid app → **General Information → Interactions Endpoint URL**:
+
+```
+https://<unraid-tailscale-hostname>:8443/api/discord
+```
+
+Discord sends a verification ping — the stack must be running for it to succeed.
+
+**8. Register slash commands for the Unraid bot** (from Mac):
+
+```bash
+TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-global
+```
+
+Remember to invite the bot to the server via OAuth2 URL Generator first (see [Discord setup](#2-discord-setup)).
+
+### Updating to a new image
+
+```bash
+# 1. Build and push from Mac
+make push
+
+# 2. On Unraid — Compose Manager → mastra-app → Restart
+#    (Compose Manager pulls the latest image on restart)
+```
+
+### Environment variables in Docker
+
+These variables are automatically set by `docker-compose.yml` and override anything in `.env`:
+
+| Variable | Value in Docker | Description |
+|---|---|---|
+| `DATABASE_URL` | `file:/data/mastra.db` | SQLite path inside the container |
+| `DISCORD_PENDING_PATH` | `/data/discord-pending.json` | Pending approval state path |
+| `INNGEST_BASE_URL` | `http://inngest:8288` | Points to the Inngest sidecar container |
+
+The `/data` directory inside the container is mounted from `/mnt/user/appdata/mastra` on the host.
+
+### Local Mac testing
+
+A `docker-compose.override.yml` is included that overrides the image source to build from local source and uses `./data` for storage:
+
+```bash
+# On Mac — docker-compose.override.yml is auto-merged
+make build      # builds local image
+docker compose up
+```
+
+Create `./data/` first (or let Docker create it on first run).
+
+---
+
+## CI/CD (Makefile & planned GitHub Actions)
+
+### Current workflow
+
+All build and release operations are managed via `Makefile`. Run `make help` to see all targets.
+
+| Target | What it does |
+|---|---|
+| `make push` | Build multi-platform image (arm64 + amd64) and push to Docker Hub |
+| `make build` | Build locally for the current platform only (dev/testing) |
+| `make register-guild` | Register slash commands guild-scoped — instant (Mac dev bot) |
+| `make register-global` | Register slash commands globally — ~1h propagation (Unraid prod bot) |
+
+**Typical deploy cycle:**
+1. Make code changes
+2. `make push` — builds and publishes the image
+3. Compose Manager → Restart the `mastra-app` stack on Unraid
+4. If slash commands changed: `TOKEN=... APP_ID=... make register-global`
+
+### Planned: GitHub Actions
+
+The goal is a `.github/workflows/deploy.yml` triggered on push to `main`:
+
+```yaml
+# Rough plan — not yet implemented
+jobs:
+  deploy:
+    steps:
+      - run: make push                          # build + push multi-platform image
+      - run: <trigger Unraid stack restart>     # webhook or SSH
+      - run: TOKEN=${{ secrets.UNRAID_DISCORD_BOT_TOKEN }}
+               APP_ID=${{ secrets.UNRAID_DISCORD_APP_ID }}
+               make register-global             # re-register slash commands
+```
+
+Secrets needed in GitHub Actions: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `UNRAID_DISCORD_BOT_TOKEN`, `UNRAID_DISCORD_APP_ID`.

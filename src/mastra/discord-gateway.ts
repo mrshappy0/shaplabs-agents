@@ -105,11 +105,24 @@ export function startDiscordGateway(mastra: Mastra): void {
       console.log('[discord-gateway] WebSocket opened');
     });
 
-    ws.addEventListener('message', (event) => {
+    ws.addEventListener('message', async (event) => {
       let payload: { op: number; d?: unknown; t?: string; s?: number | null };
       try {
-        payload = JSON.parse(event.data as string) as typeof payload;
-      } catch {
+        // Node 22's built-in WebSocket may deliver event.data as a Blob or BufferSource
+        const raw = typeof event.data === 'string'
+          ? event.data
+          : typeof (event.data as Blob)?.text === 'function'
+            ? await (event.data as Blob).text()
+            : event.data instanceof ArrayBuffer || ArrayBuffer.isView(event.data)
+              ? new TextDecoder('utf-8').decode(
+                  event.data instanceof ArrayBuffer ? event.data : (event.data as ArrayBufferView),
+                )
+              : typeof Buffer !== 'undefined' && Buffer.isBuffer(event.data)
+                ? event.data.toString('utf8')
+                : String(event.data);
+        payload = JSON.parse(raw) as typeof payload;
+      } catch (err) {
+        console.error('[discord-gateway] Failed to parse message:', typeof event.data, err);
         return;
       }
 
@@ -176,6 +189,8 @@ export function startDiscordGateway(mastra: Mastra): void {
 
     ws.addEventListener('close', (event) => {
       const code = (event as CloseEvent).code;
+      const reason = (event as CloseEvent).reason;
+      console.log(`[discord-gateway] WebSocket closed: code=${code} reason=${reason}`);
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
