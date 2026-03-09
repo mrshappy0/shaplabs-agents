@@ -14,7 +14,7 @@ services:
     container_name: mastra-inngest
     image: node:22-alpine
     command: >
-      sh -c "npx --yes inngest-cli@latest dev
+      sh -c "npx --yes inngest-cli@1.17.2 dev
         --port 8288
         -u http://mastra:4111/api/inngest"
     ports:
