@@ -11,6 +11,7 @@
 
 services:
   inngest:
+    container_name: mastra-inngest
     image: node:22-alpine
     command: >
       sh -c "npx --yes inngest-cli@latest dev
@@ -19,8 +20,11 @@ services:
     ports:
       - "8288:8288"
     restart: unless-stopped
+    labels:
+      net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/78935958?v=4"
 
   mastra:
+    container_name: mastra
     image: o0atomos0o/mastra-app:latest
     ports:
       - "4111:4111"
@@ -34,6 +38,8 @@ services:
     depends_on:
       - inngest
     restart: unless-stopped
+    labels:
+      net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/149120496?v=4"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4111/health"]
       interval: 30s
