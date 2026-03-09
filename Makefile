@@ -33,5 +33,5 @@ register-guild:
 # Pass Unraid bot credentials inline so they don't overwrite your .env:
 #   TOKEN=MTQ4M... APP_ID=1480302... make register-global
 register-global:
-	DISCORD_BOT_TOKEN=$(TOKEN) DISCORD_APP_ID=$(APP_ID) \
+	DISCORD_BOT_TOKEN=$(TOKEN) DISCORD_APP_ID=$(APP_ID) DISCORD_GUILD_ID= \
 		npx tsx src/scripts/register-discord-commands.ts
