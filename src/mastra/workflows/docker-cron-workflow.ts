@@ -56,10 +56,10 @@ export const dockerCronWorkflow = createWorkflow({
   id: 'docker-cron-workflow',
   inputSchema: z.object({ prompt: z.string() }),
   outputSchema: z.object({ text: z.string() }),
-  // TODO: Re-instate daily cron schedule once debugging is complete:
-  // cron: '0 18 * * *', // Run every day at 12:00 PM MDT / 11:00 AM MST (18:00 UTC)
+  // Run every day at 12:00 PM MDT / 11:00 AM MST (18:00 UTC)
+  cron: '0 18 * * *',
   // Temporary: run every 10 minutes for debugging
-  cron: '*/10 * * * *',
+  // cron: '*/10 * * * *',
   inputData: { prompt: DOCKER_CHECK_PROMPT },
 })
   .then(runDockerManagerStep)

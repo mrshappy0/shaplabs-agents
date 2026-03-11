@@ -58,7 +58,7 @@ Fill in `.env`. Every variable is described below.
 
 | Variable | Description |
 |---|---|
-| `MASTRA_API_TOKEN` | A secret string you choose. Guards the Mastra REST API (`/api/*`). The Discord and Inngest routes are public — everything else requires `Authorization: Bearer <token>`. |
+| `MASTRA_JWT_SECRET` | A 256-bit hex secret used to sign and verify JWT tokens. Generate one with `openssl rand -hex 32`. Guards all `/api/*` routes — the Discord and Inngest routes are public. See [Studio access](#studio-access) for how to generate a bearer token. |
 
 ### Home Assistant MCP (optional)
 
@@ -198,6 +198,62 @@ Once all three are up:
 - `/docker-check` in Discord triggers a manual check
 - Typing any message in the channel goes to the agent
 - The daily cron fires automatically at 19:00 UTC
+
+---
+
+## Studio access
+
+Mastra Studio is a web dashboard for inspecting agents, memory threads, traces, and workflow runs. In **dev mode** (`pnpm dev`) it opens unauthenticated at [http://localhost:4111](http://localhost:4111). In **production** (Docker / `mastra start`) it is served at `/studio` and protected by JWT auth.
+
+### Generating a JWT bearer token
+
+You need a signed JWT to authenticate with the Studio UI and all protected API routes.
+
+**1. Make sure `MASTRA_JWT_SECRET` is set** in your `.env`:
+
+```bash
+# Generate a secret (run once, copy the output into .env)
+openssl rand -hex 32
+```
+
+**2. Generate a long-lived JWT** using Node.js:
+
+```bash
+node -e "
+  const jwt = require('jsonwebtoken');
+  const token = jwt.sign(
+    { role: 'admin', sub: 'studio-user' },
+    process.env.MASTRA_JWT_SECRET,
+    { expiresIn: '365d' }
+  );
+  console.log(token);
+"
+```
+
+> **Tip:** If `jsonwebtoken` isn't in your global node_modules, run `npx -y jsonwebtoken` first, or use the copy installed in the project's pnpm store:
+> ```bash
+> node -e "const jwt = require('$(pnpm store path)/v3/files/.../jsonwebtoken/...'); ..."
+> ```
+> The simplest approach: run `node` in the project directory (where `node_modules` exists) and `require('jsonwebtoken')` will resolve.
+
+Copy the output token — it looks like `eyJhbGciOiJI...`.
+
+### Configuring Studio to use the token
+
+Studio runs as a browser SPA and stores its settings in `localStorage`, so you must configure each browser once:
+
+1. Open Studio at `http://<host>:<port>/studio`
+2. Click the **Settings** icon (gear) in the bottom-left corner
+3. Under **Request Headers**, add a custom header:
+   - **Header name:** `Authorization`
+   - **Header value:** `Bearer <your-token>`
+4. Save — Studio will reload and authenticate all API requests automatically
+
+> The token persists in that browser's `localStorage`. If you clear site data or use a new browser, repeat steps 2–4.
+
+### Docker / Unraid
+
+In the Docker Compose deployment, Studio is available at `http://<unraid-ip>:4111/studio`. The `MASTRA_STUDIO_PATH` environment variable is set automatically by `docker-compose.yml` — no extra configuration needed. Follow the same steps above to generate a token and configure the browser.
 
 ---
 

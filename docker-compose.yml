@@ -45,12 +45,13 @@ services:
       DATABASE_URL: "file:/data/mastra.db"
       DISCORD_PENDING_PATH: "/data/discord-pending.json"
       INNGEST_BASE_URL: "http://inngest:8288"
+      MASTRA_STUDIO_PATH: "/app/.mastra/output/studio"
     volumes:
       - /mnt/user/appdata/mastra:/data
     restart: unless-stopped
     labels:
       net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/149120496?v=4"
-      net.unraid.docker.webui: "http://[IP]:[PORT:4111]/"
+      net.unraid.docker.webui: "http://[IP]:[PORT:4111]/studio"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4111/health"]
       interval: 30s

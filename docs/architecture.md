@@ -111,7 +111,7 @@ This means:
 | Concern | How it's handled |
 |---|---|
 | Discord interaction authenticity | Ed25519 signature verified on every POST to `/api/discord` using `DISCORD_PUBLIC_KEY` |
-| Mastra REST API access | Bearer token (`MASTRA_API_TOKEN`) required on all routes except `/api/discord` and `/api/inngest` |
+| Mastra REST API access | JWT auth (`MASTRA_JWT_SECRET`) — all `/api/*` routes require `Authorization: Bearer <jwt>` except `/api/discord` and `/api/inngest`. Studio is served at `/studio` (public SPA, but API calls still need the token). |
 | Unraid API | API key only sent server-side; never exposed to Discord or the browser |
 | Sensitive data in traces | `SensitiveDataFilter` redacts keys/tokens from Mastra observability traces |
 | Discord pending state | `discord-pending.json` stored locally; entries expire after 24h; `runId` is a timestamp-based opaque ID |

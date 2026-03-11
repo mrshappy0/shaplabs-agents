@@ -27,9 +27,16 @@ export const mastra = new Mastra({
   agents: { weatherAgent, dockerClassifierAgent, dockerManagerAgent },
   server: {
     host: '0.0.0.0',
+    studioBase: '/studio',
     auth: new MastraJwtAuth({
       secret: process.env.MASTRA_JWT_SECRET!,
-      public: ['/api/discord', '/api/inngest'],
+      public: [
+        '/api/discord',   // Ed25519 signature-verified by Discord
+        '/api/inngest',   // Internal Docker network only
+        '/studio/*',      // Studio SPA + static assets
+        '/studio',        // Studio root
+      ],
+      protected: ['/api/*'],
     }),
     apiRoutes: [
       {
@@ -56,7 +63,6 @@ export const mastra = new Mastra({
         serviceName: 'mastra',
         exporters: [
           new DefaultExporter(), // Persists traces to storage for Mastra Studio
-          // new CloudExporter(), // Sends traces to Mastra Cloud (if MASTRA_CLOUD_ACCESS_TOKEN is set)
         ],
         spanOutputProcessors: [
           new SensitiveDataFilter(), // Redacts sensitive data like passwords, tokens, keys

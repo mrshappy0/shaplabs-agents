@@ -27,7 +27,7 @@ npx inngest-cli@latest dev -u http://localhost:4111/api/inngest
 pnpm dev
 ```
 
-Mastra Studio opens at [http://localhost:4111](http://localhost:4111).
+Mastra Studio opens at [http://localhost:4111](http://localhost:4111). In production (Docker), Studio is at `/studio` and requires a JWT bearer token — see [docs/setup.md §Studio access](docs/setup.md#studio-access).
 
 For Discord to reach your local server you need Tailscale Funnel running — see [docs/setup.md](docs/setup.md#tailscale-funnel).
 
