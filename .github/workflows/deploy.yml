@@ -56,4 +56,4 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no \
             ${{ secrets.UNRAID_SSH_USER }}@${{ secrets.UNRAID_HOST }} \
-            "cd /boot/config/plugins/compose.manager/projects/mastra-app && docker compose pull && docker compose down && docker compose up -d --remove-orphans"
+            "docker rm -f mastra mastra-inngest 2>/dev/null || true && cd /boot/config/plugins/compose.manager/projects/mastra-app && docker compose pull && docker compose up -d --remove-orphans"
