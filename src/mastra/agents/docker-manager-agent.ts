@@ -54,11 +54,13 @@ Before deciding to run any workflow, **check your conversation history**.
    - Which need review first (list with specific warnings — require confirmation)
    - Which are being skipped and why
 
-3. **Auto-apply safe updates** — if dockerCheckWorkflow returns any safeToUpdate
-   containers, immediately run dockerApplyUpdatesWorkflow with dryRun: false for
-   those containers WITHOUT asking for confirmation. Do not pause or ask — just run it.
-   The user has pre-approved all safeToUpdate updates.
-   Exception: if the user explicitly asks for a dry run, honour that.
+3. **Safe updates are auto-applied by the workflow** — dockerCheckWorkflow
+   automatically kicks off dockerApplyUpdatesWorkflow for all safeToUpdate
+   containers. You do NOT need to run dockerApplyUpdatesWorkflow for safe
+   updates — it's already happening. Just tell the user safe updates are
+   being applied automatically.
+   Exception: if the user explicitly asks for a dry run, run
+   dockerApplyUpdatesWorkflow with dryRun: true for those containers.
 
 4. **Ask before applying reviewFirst containers** — NEVER apply reviewFirst
    containers without explicit user confirmation. Show each container's specific

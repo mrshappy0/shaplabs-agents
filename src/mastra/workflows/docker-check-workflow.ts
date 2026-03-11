@@ -857,6 +857,46 @@ IMPORTANT: The output upToDate array MUST contain every name listed above — do
   },
 });
 
+// ── Auto-apply safe updates step ──────────────────────────────────────────────
+//
+// Deterministic: if the classification produced any safeToUpdate containers,
+// kick off dockerApplyUpdatesWorkflow automatically. This removes the
+// dependency on the LLM agent reliably calling the apply workflow — which it
+// fails to do when reviewFirst containers are also present.
+//
+// Fire-and-forget: the apply workflow has its own Discord notification step,
+// so results appear in the channel once preflight → apply → verify completes.
+
+const autoApplySafeUpdatesStep = createStep({
+  id: 'auto-apply-safe-updates',
+  description:
+    'If safeToUpdate is non-empty, fires off dockerApplyUpdatesWorkflow for those ' +
+    'containers (fire-and-forget). The apply workflow handles its own Discord notification. ' +
+    'The check report is passed through unchanged.',
+  inputSchema: dockerReportSchema,
+  outputSchema: dockerReportSchema,
+  execute: async ({ inputData, mastra: mastraInstance }) => {
+    if (inputData.safeToUpdate.length > 0 && mastraInstance) {
+      try {
+        const workflow = mastraInstance.getWorkflow('dockerApplyUpdatesWorkflow');
+        const run = await workflow.createRun();
+        // Fire-and-forget — don't block the check workflow on apply + verify
+        run.start({
+          inputData: {
+            containers: inputData.safeToUpdate.map(c => ({ containerName: c.containerName })),
+            dryRun: false,
+          },
+        }).catch(err => {
+          console.error('[docker-check-workflow] auto-apply failed:', err);
+        });
+      } catch (err) {
+        console.error('[docker-check-workflow] could not start auto-apply:', err);
+      }
+    }
+    return inputData;
+  },
+});
+
 // ── Discord notification step ────────────────────────────────────────────────
 
 const notifyDiscordStep = createStep({
@@ -893,5 +933,6 @@ export const dockerCheckWorkflow = createWorkflow({
   .then(resolveRunningVersionsStep)
   .then(fetchChangelogsStep)
   .then(classifyUpdatesStep)
+  .then(autoApplySafeUpdatesStep)
   .then(notifyDiscordStep)
   .commit();
