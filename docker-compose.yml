@@ -32,7 +32,7 @@ services:
       mastra:
         condition: service_started
     labels:
-      net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/78935958?v=4"
+      net.unraid.docker.icon: "/boot/config/plugins/compose.manager/projects/mastra-app/mastra-inngest.png"
       net.unraid.docker.webui: "http://[IP]:[PORT:8288]/"
 
   mastra:
@@ -50,7 +50,7 @@ services:
       - /mnt/user/appdata/mastra:/data
     restart: unless-stopped
     labels:
-      net.unraid.docker.icon: "https://avatars.githubusercontent.com/u/149120496?v=4"
+      net.unraid.docker.icon: "/boot/config/plugins/compose.manager/projects/mastra-app/mastra.png"
       net.unraid.docker.webui: "http://[IP]:[PORT:4111]/studio"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4111/health"]
