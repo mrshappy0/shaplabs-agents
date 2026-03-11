@@ -8,7 +8,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm build
+RUN npx mastra build --studio
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime

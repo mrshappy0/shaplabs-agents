@@ -1,5 +1,6 @@
 
 import { Mastra } from '@mastra/core/mastra';
+import { MastraJwtAuth } from '@mastra/auth';
 import { PinoLogger } from '@mastra/loggers';
 import { storage } from './storage';
 import { Observability, DefaultExporter, SensitiveDataFilter } from '@mastra/observability';
@@ -26,16 +27,10 @@ export const mastra = new Mastra({
   agents: { weatherAgent, dockerClassifierAgent, dockerManagerAgent },
   server: {
     host: '0.0.0.0',
-    auth: {
+    auth: new MastraJwtAuth({
+      secret: process.env.MASTRA_JWT_SECRET!,
       public: ['/api/discord', '/api/inngest'],
-      authenticateToken: async (token: string) => {
-        if (token === process.env.MASTRA_API_TOKEN) {
-          return { role: 'admin' };
-        }
-        throw new Error('Unauthorized');
-      },
-      authorize: async () => true,
-    },
+    }),
     apiRoutes: [
       {
         path: '/api/inngest',

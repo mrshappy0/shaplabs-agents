@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@inngest/realtime": "^0.4.6",
+    "@mastra/auth": "^1.0.1",
     "@mastra/core": "^1.4.0",
     "@mastra/evals": "^1.1.1",
     "@mastra/inngest": "^1.1.2",
