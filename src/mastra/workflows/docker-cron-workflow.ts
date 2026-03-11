@@ -56,8 +56,8 @@ export const dockerCronWorkflow = createWorkflow({
   id: 'docker-cron-workflow',
   inputSchema: z.object({ prompt: z.string() }),
   outputSchema: z.object({ text: z.string() }),
-  // Run every day at 12:00 PM MST (19:00 UTC)
-  cron: '0 19 * * *',
+  // Run every day at 12:00 PM MDT / 11:00 AM MST (18:00 UTC)
+  cron: '0 18 * * *',
   inputData: { prompt: DOCKER_CHECK_PROMPT },
 })
   .then(runDockerManagerStep)
