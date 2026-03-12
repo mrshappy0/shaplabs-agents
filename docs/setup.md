@@ -95,19 +95,24 @@ If you ever need to change permissions: regenerate the URL with the new permissi
 
 ### Register slash commands
 
-Use the Makefile targets (recommended) or run the script directly:
+Use the Makefile targets — run any time you add or change a command:
 
 ```bash
-# Instant, guild-scoped — Mac dev bot
+# Dev bot — instant, guild-scoped
 # Reads DISCORD_BOT_TOKEN, DISCORD_APP_ID, DISCORD_GUILD_ID from .env
 make register-guild
 
-# Global, ~1 hour propagation — Unraid prod bot
-# Pass Unraid credentials inline so they don't overwrite your .env
+# Prod bot — instant, guild-scoped (recommended)
+# Pass Unraid credentials inline; DISCORD_GUILD_ID is the same server, read from .env
+TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-prod-guild
+
+# Prod bot — global (~1h propagation, only needed for public bots)
 TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-global
 ```
 
-Registration is idempotent — safe to re-run after adding or changing commands. Re-run it any time you modify `src/scripts/register-discord-commands.ts`.
+> **Easiest way for prod:** Use the GitHub Copilot prompt — open Command Palette → `Chat: Run Prompt` → **Register Prod Discord Slash Commands**. It asks for your token and app ID, shows the exact command, and waits for approval before executing.
+
+Registration is idempotent — safe to re-run after adding or changing commands. Re-run any time you modify `src/scripts/register-discord-commands.ts`.
 
 ### Running two bots (dev vs prod)
 
@@ -116,7 +121,9 @@ This project supports two independent Discord apps:
 | Bot | Scope | Channel | Command registration |
 |---|---|---|---|
 | Mac dev bot | Guild-scoped (instant) | Dev channel | `make register-guild` |
-| Unraid prod bot | Global (~1h) | Prod channel | `TOKEN=... APP_ID=... make register-global` |
+| Unraid prod bot | Guild-scoped (instant) | Prod channel | `TOKEN=... APP_ID=... make register-prod-guild` |
+
+`DISCORD_GUILD_ID` is your Discord **server** ID — the same for both bots since they share the same server. Only the bot token and app ID differ between dev and prod.
 
 Each bot only responds to its configured `DISCORD_CHANNEL_ID`, so even if both bots show `/docker-check` in the command picker, only the bot for that channel will act on it.
 
@@ -334,8 +341,10 @@ Discord sends a verification ping — the stack must be running for it to succee
 **8. Register slash commands for the Unraid bot** (from Mac):
 
 ```bash
-TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-global
+TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-prod-guild
 ```
+
+Or use the GitHub Copilot prompt: Command Palette → `Chat: Run Prompt` → **Register Prod Discord Slash Commands** — it walks you through credentials and runs the command for you.
 
 Remember to invite the bot to the server via OAuth2 URL Generator first (see [Discord setup](#2-discord-setup)).
 
@@ -386,13 +395,16 @@ All build and release operations are managed via `Makefile`. Run `make help` to 
 | `make push` | Build multi-platform image (arm64 + amd64) and push to Docker Hub |
 | `make build` | Build locally for the current platform only (dev/testing) |
 | `make register-guild` | Register slash commands guild-scoped — instant (Mac dev bot) |
-| `make register-global` | Register slash commands globally — ~1h propagation (Unraid prod bot) |
+| `make register-prod-guild` | Register slash commands guild-scoped — instant (Unraid prod bot) |
+| `make register-global` | Register slash commands globally — ~1h propagation (rarely needed) |
 
 **Typical deploy cycle:**
 1. Make code changes
 2. `make push` — builds and publishes the image
 3. Compose Manager → Restart the `mastra-app` stack on Unraid
-4. If slash commands changed: `TOKEN=... APP_ID=... make register-global`
+4. If slash commands changed: `TOKEN=... APP_ID=... make register-prod-guild`
+
+> **Tip:** Use the GitHub Copilot prompt for prod registration — Command Palette → `Chat: Run Prompt` → **Register Prod Discord Slash Commands**.
 
 ### Planned: GitHub Actions
 
@@ -407,7 +419,7 @@ jobs:
       - run: <trigger Unraid stack restart>     # webhook or SSH
       - run: TOKEN=${{ secrets.UNRAID_DISCORD_BOT_TOKEN }}
                APP_ID=${{ secrets.UNRAID_DISCORD_APP_ID }}
-               make register-global             # re-register slash commands
+               make register-prod-guild         # re-register slash commands (guild-scoped, instant)
 ```
 
 Secrets needed in GitHub Actions: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `UNRAID_DISCORD_BOT_TOKEN`, `UNRAID_DISCORD_APP_ID`.

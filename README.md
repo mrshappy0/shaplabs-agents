@@ -33,15 +33,20 @@ For Discord to reach your local server you need Tailscale Funnel running — see
 
 ## Register Discord slash commands
 
-Run once (or any time you add a new command):
+Run once (or any time you add or change a command):
 
 ```bash
-# Guild-scoped — instant, your server only (Mac dev bot)
+# Dev bot — guild-scoped, instant
 make register-guild
 
-# Global — takes up to 1 hour to propagate (Unraid prod bot)
+# Prod bot (Unraid) — guild-scoped, instant (recommended)
+TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-prod-guild
+
+# Prod bot (Unraid) — global, ~1h propagation
 TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-global
 ```
+
+> **Tip:** Use the GitHub Copilot prompt for prod registration — open Command Palette → `Chat: Run Prompt` → **Register Prod Discord Slash Commands**. It walks you through credentials, shows the exact command, and waits for your approval before running.
 
 > **Before registering:** The bot must be invited to the server first via the OAuth2 URL Generator — otherwise you'll get `403 Forbidden: Missing Access`. See [docs/setup.md §Discord setup](docs/setup.md#2-discord-setup).
 
@@ -50,6 +55,7 @@ Available slash commands:
 | Command | What it does |
 |---|---|
 | `/docker-check` | Triggers a full update check + auto-applies safe updates |
+| `/clear` | Deletes all messages in the channel and resets bot memory |
 
 You can also just **type in the channel** — the bot reads every message and responds like a chat interface.
 

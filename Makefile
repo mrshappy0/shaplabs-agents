@@ -1,6 +1,6 @@
 IMAGE := o0atomos0o/mastra-app:latest
 
-.PHONY: push build register-guild register-global help
+.PHONY: push build register-guild register-prod-guild register-global help
 
 help:
 	@echo "Usage: make <target>"
@@ -9,6 +9,8 @@ help:
 	@echo "  build             Build image locally for the current platform only (dev)"
 	@echo "  register-guild    Register slash commands guild-scoped — instant (Mac dev bot)"
 	@echo "                      Uses DISCORD_BOT_TOKEN, DISCORD_APP_ID, DISCORD_GUILD_ID from .env"
+	@echo "  register-prod-guild Register slash commands guild-scoped — instant (Unraid prod bot)"
+	@echo "                      Pass credentials inline: TOKEN=... APP_ID=... make register-prod-guild"
 	@echo "  register-global   Register slash commands globally — ~1h propagation (Unraid prod bot)"
 	@echo "                      Pass credentials inline: TOKEN=... APP_ID=... make register-global"
 	@echo ""
@@ -27,6 +29,14 @@ build:
 # Reads credentials from .env automatically via dotenv in the script
 register-guild:
 	npx tsx src/scripts/register-discord-commands.ts
+
+# Register slash commands guild-scoped (instant) — Unraid prod bot
+# Pass prod credentials inline so they override your local .env dev credentials:
+# DISCORD_GUILD_ID is the same server for dev and prod — read from .env as-is.
+#   TOKEN=MTQ4M... APP_ID=1480302... make register-prod-guild
+register-prod-guild:
+	DISCORD_BOT_TOKEN=$(TOKEN) DISCORD_APP_ID=$(APP_ID) \
+		npx tsx src/scripts/register-discord-commands.ts
 
 # Register slash commands globally (~1h propagation) — Unraid prod bot
 # The bot must already be invited to the server via OAuth2 URL Generator first.

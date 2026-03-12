@@ -48,9 +48,16 @@ Inngest UI: [http://localhost:8288](http://localhost:8288)
 ### Register Discord slash commands
 
 ```bash
-# Guild-scoped (instant)
-DISCORD_GUILD_ID=<id> npx tsx src/scripts/register-discord-commands.ts
+# Dev bot — guild-scoped, instant (reads from .env)
+make register-guild
+
+# Prod bot — guild-scoped, instant (recommended)
+TOKEN=<unraid-bot-token> APP_ID=<unraid-app-id> make register-prod-guild
 ```
+
+Or use the GitHub Copilot prompt for prod: Command Palette → `Chat: Run Prompt` → **Register Prod Discord Slash Commands** — it asks for credentials, shows the exact command, and waits for approval.
+
+Re-run whenever you add or change a slash command in `src/scripts/register-discord-commands.ts`. `DISCORD_GUILD_ID` is always read from `.env` — it's the same server for both bots.
 
 ### Build
 
