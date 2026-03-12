@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   build-and-deploy:
@@ -23,13 +30,15 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build & push multi-platform image
+      - name: Build & push image
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: o0atomos0o/mastra-app:latest
+          cache-from: type=registry,ref=o0atomos0o/mastra-app:buildcache
+          cache-to: type=registry,ref=o0atomos0o/mastra-app:buildcache,mode=max
 
       # Joins the runner to your Tailnet as an ephemeral node.
       # The node disappears automatically when the job ends.
@@ -52,8 +61,8 @@ jobs:
             docker-compose.yml \
             ${{ secrets.UNRAID_SSH_USER }}@${{ secrets.UNRAID_HOST }}:/boot/config/plugins/compose.manager/projects/mastra-app/docker-compose.yml
 
-      - name: Pull new image & restart stack
+      - name: Pull new image & restart mastra
         run: |
           ssh -o StrictHostKeyChecking=no \
             ${{ secrets.UNRAID_SSH_USER }}@${{ secrets.UNRAID_HOST }} \
-            "docker rm -f mastra mastra-inngest 2>/dev/null || true && cd /boot/config/plugins/compose.manager/projects/mastra-app && docker compose pull && docker compose up -d --remove-orphans"
+            "cd /boot/config/plugins/compose.manager/projects/mastra-app && docker compose pull mastra && docker compose up -d --no-deps mastra"

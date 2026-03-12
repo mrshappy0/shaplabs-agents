@@ -5,7 +5,7 @@ IMAGE := o0atomos0o/mastra-app:latest
 help:
 	@echo "Usage: make <target>"
 	@echo ""
-	@echo "  push              Build multi-platform image (amd64 + arm64) and push to Docker Hub"
+	@echo "  push              Build amd64 image and push to Docker Hub (manual)"
 	@echo "  build             Build image locally for the current platform only (dev)"
 	@echo "  register-guild    Register slash commands guild-scoped — instant (Mac dev bot)"
 	@echo "                      Uses DISCORD_BOT_TOKEN, DISCORD_APP_ID, DISCORD_GUILD_ID from .env"
@@ -17,9 +17,9 @@ help:
 	@echo "Planned (not yet implemented):"
 	@echo "  deploy            Push image + trigger Unraid stack restart via webhook"
 
-# Build for both Mac (arm64) and Unraid (amd64) and push to Docker Hub
+# Build for Unraid (amd64) and push to Docker Hub
 push:
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(IMAGE) --push .
+	docker buildx build --platform linux/amd64 -t $(IMAGE) --push .
 
 # Build locally for the current machine only (faster, for dev testing)
 build:
