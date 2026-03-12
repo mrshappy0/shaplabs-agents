@@ -1,7 +1,7 @@
 /**
- * Docker Update Workflow v2 — workflow-first approach
+ * Docker Update Cycle Workflow (docker-update-cycle-workflow) — workflow-first approach
  *
- * Compare to docker-update-workflow.ts (agent-first):
+ * Compare to the earlier agent-first approach:
  *   Agent-first:  1 step → agent autonomously calls tools, discovers repos,
  *                 reasons about risk, writes a report. Black box.
  *
@@ -30,7 +30,7 @@ import {
   type CheckRegistryUpdatesOutput,
   type ResolveVersionOutput,
 } from '../tools/docker-tools';
-import { notifyUpdateReport } from '../tools/discord-tools';
+import { notifyUpdateReport } from '../../utils/discord-tools';
 
 // ── Output schema ─────────────────────────────────────────────────────────────
 // Defined here rather than in an agent file — the workflow owns this type now.
@@ -857,6 +857,46 @@ IMPORTANT: The output upToDate array MUST contain every name listed above — do
   },
 });
 
+// ── Auto-apply safe updates step ──────────────────────────────────────────────
+//
+// Deterministic: if the classification produced any safeToUpdate containers,
+// kick off dockerApplyUpdatesWorkflow automatically. This removes the
+// dependency on the LLM agent reliably calling the apply workflow — which it
+// fails to do when reviewFirst containers are also present.
+//
+// Fire-and-forget: the apply workflow has its own Discord notification step,
+// so results appear in the channel once preflight → apply → verify completes.
+
+const autoApplySafeUpdatesStep = createStep({
+  id: 'auto-apply-safe-updates',
+  description:
+    'If safeToUpdate is non-empty, fires off dockerApplyUpdatesWorkflow for those ' +
+    'containers (fire-and-forget). The apply workflow handles its own Discord notification. ' +
+    'The check report is passed through unchanged.',
+  inputSchema: dockerReportSchema,
+  outputSchema: dockerReportSchema,
+  execute: async ({ inputData, mastra: mastraInstance }) => {
+    if (inputData.safeToUpdate.length > 0 && mastraInstance) {
+      try {
+        const workflow = mastraInstance.getWorkflow('dockerApplyUpdatesWorkflow');
+        const run = await workflow.createRun();
+        // Fire-and-forget — don't block the check workflow on apply + verify
+        run.start({
+          inputData: {
+            containers: inputData.safeToUpdate.map(c => ({ containerName: c.containerName })),
+            dryRun: false,
+          },
+        }).catch(err => {
+          console.error('[docker-update-cycle-workflow] auto-apply failed:', err);
+        });
+      } catch (err) {
+        console.error('[docker-update-cycle-workflow] could not start auto-apply:', err);
+      }
+    }
+    return inputData;
+  },
+});
+
 // ── Discord notification step ────────────────────────────────────────────────
 
 const notifyDiscordStep = createStep({
@@ -872,8 +912,8 @@ const notifyDiscordStep = createStep({
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-export const dockerUpdateWorkflow = createWorkflow({
-  id: 'docker-update-workflow',
+export const dockerUpdateCycleWorkflow = createWorkflow({
+  id: 'docker-update-cycle-workflow',
   description:
     'Workflow-first Docker update checker. ' +
     'Steps 1-4 are fully deterministic (tool calls + logic). ' +
@@ -893,5 +933,6 @@ export const dockerUpdateWorkflow = createWorkflow({
   .then(resolveRunningVersionsStep)
   .then(fetchChangelogsStep)
   .then(classifyUpdatesStep)
+  .then(autoApplySafeUpdatesStep)
   .then(notifyDiscordStep)
   .commit();

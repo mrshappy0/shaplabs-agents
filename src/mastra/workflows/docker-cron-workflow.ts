@@ -1,27 +1,11 @@
 import { z } from 'zod';
 import { init, createStep } from '@mastra/inngest';
 import { inngest } from '../inngest';
-import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../discord-gateway';
+import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../../server/discord-gateway';
 import { DOCKER_CHECK_PROMPT } from '../agents/docker-manager-agent';
-import { postMessage } from '../tools/discord-bot';
+import { postMessage, chunkMessage } from '../../utils/discord-bot';
 
 const { createWorkflow } = init(inngest);
-
-/** Discord message limit is 2000 chars. Break at newlines where possible. */
-function chunkMessage(text: string, max = 1990): string[] {
-  if (text.length <= max) return [text];
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > max) {
-    const slice = remaining.slice(0, max);
-    const lastNewline = slice.lastIndexOf('\n');
-    const breakAt = lastNewline > max / 2 ? lastNewline : max;
-    chunks.push(remaining.slice(0, breakAt));
-    remaining = remaining.slice(breakAt).trimStart();
-  }
-  if (remaining.length > 0) chunks.push(remaining);
-  return chunks;
-}
 
 // Pull the agent through the Mastra instance so observability/tracing is captured
 const runDockerManagerStep = createStep({
@@ -38,7 +22,7 @@ const runDockerManagerStep = createStep({
       },
     });
 
-    // Post the agent's text response to Discord — the dockerCheckWorkflow
+    // Post the agent's text response to Discord — the dockerUpdateCycleWorkflow
     // already posts rich embeds, but the agent's summary/conversation text
     // was previously lost because nothing sent it to the channel.
     const text = result.text?.trim();

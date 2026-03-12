@@ -13,6 +13,24 @@
 
 const DISCORD_API = 'https://discord.com/api/v10';
 
+// ── Message chunking ──────────────────────────────────────────────────────────
+
+/** Discord message limit is 2000 chars. Break at newlines where possible. */
+export function chunkMessage(text: string, max = 1990): string[] {
+  if (text.length <= max) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > max) {
+    const slice = remaining.slice(0, max);
+    const lastNewline = slice.lastIndexOf('\n');
+    const breakAt = lastNewline > max / 2 ? lastNewline : max;
+    chunks.push(remaining.slice(0, breakAt));
+    remaining = remaining.slice(breakAt).trimStart();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 // ── Button custom_id conventions ──────────────────────────────────────────────
 //
 //   apply_one:{runId}:{containerName}
@@ -128,7 +146,7 @@ interface ReviewContainer {
  *
  * Discord limits: 5 buttons per row, 5 rows per message (25 buttons total).
  * We put Apply-All on the first row, then individual containers after.
- * If there are more than 4 individual containers we truncate — edge case.
+ * If there are more than 9 individual containers (4 in row 1, 5 in row 2) we truncate — edge case.
  */
 export function buildApprovalComponents(
   runId: string,

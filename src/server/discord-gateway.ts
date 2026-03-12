@@ -23,7 +23,7 @@
  */
 
 import type { Mastra } from '@mastra/core/mastra';
-import { postMessage } from './tools/discord-bot';
+import { postMessage, chunkMessage } from '../utils/discord-bot';
 
 const INTENTS = 1 | 512 | 32768;
 
@@ -34,24 +34,6 @@ export const GATEWAY_RESOURCE_ID = 'discord';
 
 export function gatewayThreadId(channelId: string): string {
   return `discord-${channelId}-chat`;
-}
-
-// ── Message chunking ──────────────────────────────────────────────────────────
-
-/** Discord message limit is 2000 chars. Break at newlines where possible. */
-function chunkMessage(text: string, max = 1990): string[] {
-  if (text.length <= max) return [text];
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > max) {
-    const slice = remaining.slice(0, max);
-    const lastNewline = slice.lastIndexOf('\n');
-    const breakAt = lastNewline > max / 2 ? lastNewline : max;
-    chunks.push(remaining.slice(0, breakAt));
-    remaining = remaining.slice(breakAt).trimStart();
-  }
-  if (remaining.length > 0) chunks.push(remaining);
-  return chunks;
 }
 
 // ── Message handler ───────────────────────────────────────────────────────────

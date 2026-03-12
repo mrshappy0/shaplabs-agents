@@ -1,7 +1,7 @@
 /**
  * Docker Apply Updates Workflow
  *
- * Companion to docker-check-workflow.ts. While the check workflow discovers
+ * Companion to docker-update-cycle-workflow.ts. While the check workflow discovers
  * and classifies available updates, *this* workflow actually applies them.
  *
  * Designed to chain directly from the check workflow's output — the
@@ -35,7 +35,7 @@
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { listDockerContainers, checkRegistryUpdates, updateDockerContainer, type ListDockerContainersOutput, type CheckRegistryUpdatesOutput } from '../tools/docker-tools';
-import { notifyApplyReport } from '../tools/discord-tools';
+import { notifyApplyReport } from '../../utils/discord-tools';
 
 // ── Shared input item schema ──────────────────────────────────────────────────
 //
@@ -519,13 +519,13 @@ export const dockerApplyUpdatesWorkflow = createWorkflow({
     'Step 1 re-checks registries (preflight guard against stale reports). ' +
     'Step 2 applies updates serially via Unraid GraphQL mutation. ' +
     'Step 3 verifies success by re-checking digests. ' +
-    'Input containers array matches the safeToUpdate shape from docker-check-workflow ' +
+    'Input containers array matches the safeToUpdate shape from docker-update-cycle-workflow ' +
     'so the two workflows chain naturally. Use dryRun: true to validate without changing anything.',
   inputSchema: z.object({
     containers: z
       .array(updateCandidateSchema)
       .describe(
-        'Containers to update. Accepts the safeToUpdate array from docker-check-workflow directly. ' +
+        'Containers to update. Accepts the safeToUpdate array from docker-update-cycle-workflow directly. ' +
         'Only containerName is required — currentVersion and latestVersion are informational.',
       ),
     dryRun: z

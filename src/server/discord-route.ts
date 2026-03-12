@@ -20,10 +20,10 @@
  */
 
 import type { Mastra } from '@mastra/core/mastra';
-import { getPending, deletePending, removeContainerFromPending } from '../tools/discord-pending';
-import { editInteractionResponse, followupMessage } from '../tools/discord-bot';
-import { GATEWAY_RESOURCE_ID, gatewayThreadId } from '../discord-gateway';
-import { DOCKER_CHECK_PROMPT } from '../agents/docker-manager-agent';
+import { getPending, deletePending, removeContainerFromPending } from '../utils/discord-pending';
+import { editInteractionResponse, followupMessage } from '../utils/discord-bot';
+import { GATEWAY_RESOURCE_ID, gatewayThreadId } from './discord-gateway';
+import { DOCKER_CHECK_PROMPT } from '../mastra/agents/docker-manager-agent';
 
 // ── Ed25519 signature verification ────────────────────────────────────────────
 

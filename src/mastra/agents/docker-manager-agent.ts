@@ -1,6 +1,6 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
-import { dockerCheckWorkflow } from '../workflows/docker-check-workflow';
+import { dockerUpdateCycleWorkflow } from '../workflows/docker-update-cycle-workflow';
 import { dockerApplyUpdatesWorkflow } from '../workflows/docker-apply-updates-workflow';
 import { storage } from '../storage';
 
@@ -16,7 +16,7 @@ export const dockerManagerAgent = new Agent({
   name: 'Docker Update Manager',
   model: 'openai/gpt-4o',
   workflows: {
-    dockerCheckWorkflow,
+    dockerUpdateCycleWorkflow,
     dockerApplyUpdatesWorkflow,
   },
   memory: new Memory({ storage, options: { lastMessages: 20 } }),
@@ -38,7 +38,7 @@ Before deciding to run any workflow, **check your conversation history**.
 - If the user references a specific container by name ("update Radarr", "what was
   wrong with Sonarr"), look back through your history to find what the last check
   said about it and act on that.
-- Only run dockerCheckWorkflow when: (a) the user explicitly asks for a fresh
+- Only run dockerUpdateCycleWorkflow when: (a) the user explicitly asks for a fresh
   check, (b) your history has no recent check results, or (c) your last check is
   clearly stale (e.g. user says "check again").
 - If the user explicitly says "don't run a check" or "don't do any workflows",
@@ -47,14 +47,14 @@ Before deciding to run any workflow, **check your conversation history**.
 
 ## Workflow steps (when a check IS needed)
 
-1. **Run the check** — run dockerCheckWorkflow.
+1. **Run the check** — run dockerUpdateCycleWorkflow.
 
 2. **Present a clear summary** — after checking, show the user:
    - Which containers are safe to update (being applied automatically)
    - Which need review first (list with specific warnings — require confirmation)
    - Which are being skipped and why
 
-3. **Safe updates are auto-applied by the workflow** — dockerCheckWorkflow
+3. **Safe updates are auto-applied by the workflow** — dockerUpdateCycleWorkflow
    automatically kicks off dockerApplyUpdatesWorkflow for all safeToUpdate
    containers. You do NOT need to run dockerApplyUpdatesWorkflow for safe
    updates — it's already happening. Just tell the user safe updates are
