@@ -21,9 +21,14 @@
 
 import type { Mastra } from '@mastra/core/mastra';
 import { getPending, deletePending, removeContainerFromPending } from '../utils/discord-pending';
-import { editInteractionResponse, followupMessage } from '../utils/discord-bot';
+import { editInteractionResponse, followupMessage, clearChannelMessages } from '../utils/discord-bot';
 import { GATEWAY_RESOURCE_ID, gatewayThreadId } from './discord-gateway';
 import { DOCKER_CHECK_PROMPT } from '../mastra/agents/docker-manager-agent';
+import { Memory } from '@mastra/memory';
+import { storage } from '../mastra/storage';
+
+// Single Memory instance used only for thread management in this route
+const memory = new Memory({ storage });
 
 // ── Ed25519 signature verification ────────────────────────────────────────────
 
@@ -181,6 +186,25 @@ async function handleApplyAll(
   }
 }
 
+async function handleClear(
+  appId: string,
+  token: string,
+  channelId: string,
+): Promise<void> {
+  try {
+    const deleted = await clearChannelMessages(channelId);
+    await memory.deleteThread(gatewayThreadId(channelId));
+    await editInteractionResponse(appId, token, {
+      content: `🧹 Cleared ${deleted} message${deleted === 1 ? '' : 's'} and reset agent memory.`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await editInteractionResponse(appId, token, {
+      content: `❌ Clear failed: ${msg}`,
+    });
+  }
+}
+
 async function handleDockerCheck(
   mastra: Mastra,
 ): Promise<void> {
@@ -243,6 +267,23 @@ export function createDiscordRouteHandler(mastra: Mastra): AnyHandler {
     // ── PING ────────────────────────────────────────────────────────────────
     if (type === InteractionType.PING) {
       return jsonResponse({ type: ResponseType.PONG });
+    }
+
+    // ── /clear ──────────────────────────────────────────────────────────────
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const channelId: string = (interaction.channel_id as string) ?? process.env.DISCORD_CHANNEL_ID ?? '';
+
+    if (type === InteractionType.APPLICATION_COMMAND && data?.name === 'clear') {
+      setImmediate(() => {
+        handleClear(appId, token as string, channelId).catch(err =>
+          console.error('[discord-route] clear error:', err),
+        );
+      });
+
+      return jsonResponse({
+        type: ResponseType.DEFERRED_CHANNEL_MESSAGE,
+        data: { flags: EPHEMERAL },
+      });
     }
 
     // ── /docker-check ───────────────────────────────────────────────────────

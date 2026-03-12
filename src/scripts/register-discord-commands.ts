@@ -32,6 +32,11 @@ const commands = clearGlobal ? [] : [
     description: 'Run a Docker container update check and auto-apply safe updates',
     default_member_permissions: null,
   },
+  {
+    name: 'clear',
+    description: 'Delete all messages in this channel and reset bot memory',
+    default_member_permissions: null,
+  },
 ];
 
 const url = guildId

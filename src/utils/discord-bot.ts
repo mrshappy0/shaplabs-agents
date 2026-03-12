@@ -189,3 +189,79 @@ export function buildApprovalComponents(
 
   return rows;
 }
+
+// ── Channel clear helpers ─────────────────────────────────────────────────────
+
+const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** Fetch up to 100 messages from a channel, optionally paginating before a message ID. */
+async function fetchChannelMessages(
+  channelId: string,
+  before?: string,
+): Promise<{ id: string; timestamp: string }[]> {
+  const params = new URLSearchParams({ limit: '100' });
+  if (before) params.set('before', before);
+  const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages?${params}`, {
+    headers: botHeaders(),
+  });
+  await checkOk(res, 'fetchChannelMessages');
+  return res.json() as Promise<{ id: string; timestamp: string }[]>;
+}
+
+/** Bulk-delete 2–100 messages that are all under 14 days old. */
+async function bulkDeleteMessages(channelId: string, messageIds: string[]): Promise<void> {
+  const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages/bulk-delete`, {
+    method: 'POST',
+    headers: botHeaders(),
+    body: JSON.stringify({ messages: messageIds }),
+  });
+  await checkOk(res, 'bulkDeleteMessages');
+}
+
+/** Delete a single message (required for messages older than 14 days). */
+async function deleteSingleMessage(channelId: string, messageId: string): Promise<void> {
+  const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages/${messageId}`, {
+    method: 'DELETE',
+    headers: botHeaders(),
+  });
+  await checkOk(res, 'deleteSingleMessage');
+}
+
+/**
+ * Delete all messages in a channel.
+ * Bulk-deletes messages younger than 14 days; falls back to individual deletes
+ * for older messages (rate-limited — expected to be rare in a homelab channel).
+ * Returns the total number of messages deleted.
+ */
+export async function clearChannelMessages(channelId: string): Promise<number> {
+  const cutoff = Date.now() - FOURTEEN_DAYS_MS;
+  let deleted = 0;
+  let before: string | undefined;
+
+  for (;;) {
+    const messages = await fetchChannelMessages(channelId, before);
+    if (messages.length === 0) break;
+
+    const recent = messages.filter(m => new Date(m.timestamp).getTime() > cutoff).map(m => m.id);
+    const old    = messages.filter(m => new Date(m.timestamp).getTime() <= cutoff).map(m => m.id);
+
+    // Bulk delete requires 2+ messages; handle the single-message edge case
+    if (recent.length >= 2) {
+      await bulkDeleteMessages(channelId, recent);
+      deleted += recent.length;
+    } else if (recent.length === 1) {
+      await deleteSingleMessage(channelId, recent[0]);
+      deleted += 1;
+    }
+
+    for (const id of old) {
+      await deleteSingleMessage(channelId, id);
+      deleted += 1;
+    }
+
+    if (messages.length < 100) break;
+    before = messages[messages.length - 1].id;
+  }
+
+  return deleted;
+}
